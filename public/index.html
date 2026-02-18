@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>שוק מתנות - פריטים בחינם</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <header>
+    <div class="header-content">
+      <h1>🎁 שוק מתנות</h1>
+      <p class="subtitle">פריטים בחינם מהקהילה — קח ותיהנה!</p>
+    </div>
+    <div class="header-actions">
+      <label class="toggle-label">
+        <input type="checkbox" id="showTaken" />
+        הצג גם פריטים שנלקחו
+      </label>
+    </div>
+  </header>
+
+  <main>
+    <div id="loading" class="loading">טוען פריטים...</div>
+    <div id="empty" class="empty" style="display:none">
+      <span>😊</span>
+      <p>אין פריטים זמינים כרגע</p>
+      <small>פריטים חדשים יופיעו כאן ברגע שמישהו יפרסם בקבוצה</small>
+    </div>
+    <div id="items-grid" class="items-grid"></div>
+  </main>
+
+  <!-- Modal for full-size image -->
+  <div id="photo-modal" class="modal" style="display:none">
+    <div class="modal-backdrop" onclick="closeModal()"></div>
+    <img id="modal-img" src="" alt="תמונה מוגדלת" />
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

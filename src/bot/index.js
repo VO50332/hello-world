@@ -37,6 +37,8 @@ const client = new Client({
   },
 });
 
+let clientReady = false;
+
 client.on('qr', (qr) => {
   console.log('\n📱 Scan this QR code with WhatsApp on your phone:\n');
   qrcode.generate(qr, { small: true });
@@ -52,6 +54,7 @@ client.on('auth_failure', (msg) => {
 });
 
 client.on('ready', () => {
+  clientReady = true;
   if (targetGroupId) {
     console.log(`✅ Bot is running! Monitoring group: "${TARGET_GROUP_NAME}" (${targetGroupId})`);
   } else {
@@ -243,4 +246,4 @@ async function runScan(days, msgsPerDay = 50) {
 
 client.initialize();
 
-module.exports = { client, startScan, getScanState };
+module.exports = { client, isReady: () => clientReady, startScan, getScanState };

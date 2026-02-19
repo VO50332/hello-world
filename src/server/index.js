@@ -47,7 +47,10 @@ app.delete('/api/items/:id', (req, res) => {
 // GET /api/scan/status  — check whether the scan is still running and see results.
 app.get('/api/chats', async (req, res) => {
   try {
-    const { client } = require('../bot');
+    const { client, isReady } = require('../bot');
+    if (!isReady()) {
+      return res.status(503).json({ ok: false, error: 'WhatsApp client is not ready yet. Wait for the QR code to be scanned and the bot to print "✅ Bot is running!", then try again.' });
+    }
     const chats = await client.getChats();
     const groups = chats
       .filter(c => c.isGroup)

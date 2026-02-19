@@ -85,7 +85,7 @@ function createCard(item) {
 
   const date = document.createElement('div');
   date.className = 'item-date';
-  date.textContent = `🕐 ${formatDate(item.created_at)}`;
+  date.textContent = `🕐 ${formatDate(item.message_at || item.created_at)}`;
   meta.appendChild(date);
 
   body.appendChild(meta);

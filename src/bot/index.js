@@ -64,6 +64,11 @@ client.on('ready', () => {
   }
 });
 
+// Returns true if the message text contains markers meaning "no longer available"
+function isUnavailableMessage(text) {
+  return text ? /💾|❌/.test(text) : false;
+}
+
 // ── Main message handler ─────────────────────────────────────────────────────
 client.on('message_create', async (message) => {
   try {
@@ -87,30 +92,43 @@ client.on('message_create', async (message) => {
 
     console.log(`📨 New message in "${TARGET_GROUP_NAME}" from ${senderName}`);
 
-    // Handle photo attachments
-    let photoPath = null;
-    if (message.hasMedia) {
-      try {
-        const media = await message.downloadMedia();
-        if (media && media.mimetype?.startsWith('image/')) {
-          const ext = media.mimetype.split('/')[1]?.split(';')[0] || 'jpg';
-          const filename = `${Date.now()}_${message.id.id}.${ext}`;
-          const filePath = path.join(UPLOADS_DIR, filename);
-          fs.writeFileSync(filePath, Buffer.from(media.data, 'base64'));
-          photoPath = `/uploads/${filename}`;
-          console.log(`  📷 Photo saved: ${filename}`);
-        }
-      } catch (mediaErr) {
-        console.warn('  ⚠️  Could not download media:', mediaErr.message);
-      }
-    }
-
     const description = message.body?.trim();
 
-    if (!description && !photoPath) {
-      console.log('  ⏭️  Skipping: no text and no photo');
+    // Skip messages without a photo — likely "looking for" requests, not offers
+    if (!message.hasMedia) {
+      console.log('  ⏭️  Skipping: no photo (probably a "looking for" message)');
       return;
     }
+
+    // Skip messages marked as unavailable (💾 or ❌ in the text)
+    if (isUnavailableMessage(description)) {
+      console.log('  ⏭️  Skipping: marked as unavailable (💾/❌)');
+      return;
+    }
+
+    // Handle photo attachment
+    let photoPath = null;
+    try {
+      const media = await message.downloadMedia();
+      if (media && media.mimetype?.startsWith('image/')) {
+        const ext = media.mimetype.split('/')[1]?.split(';')[0] || 'jpg';
+        const filename = `${Date.now()}_${message.id.id}.${ext}`;
+        const filePath = path.join(UPLOADS_DIR, filename);
+        fs.writeFileSync(filePath, Buffer.from(media.data, 'base64'));
+        photoPath = `/uploads/${filename}`;
+        console.log(`  📷 Photo saved: ${filename}`);
+      } else {
+        console.log('  ⏭️  Skipping: media is not an image');
+        return;
+      }
+    } catch (mediaErr) {
+      console.warn('  ⚠️  Could not download media:', mediaErr.message);
+      return;
+    }
+
+    const messageAt = message.timestamp
+      ? new Date(message.timestamp * 1000).toISOString()
+      : new Date().toISOString();
 
     const itemId = saveItem({
       messageId: message.id.id,
@@ -118,6 +136,7 @@ client.on('message_create', async (message) => {
       phone,
       senderName,
       photoPath,
+      messageAt,
     });
 
     if (itemId) {
@@ -191,9 +210,14 @@ async function runScan(days, msgsPerDay = 50) {
   const messages = await chat.fetchMessages({ limit });
   console.log(`   Fetched ${messages.length} messages, processing...`);
 
-  // Filter to only messages within the time window that have content
-  const relevant = messages.filter(msg => msg.timestamp * 1000 >= cutoffMs);
-  console.log(`   ${relevant.length} messages within last ${days} day(s).`);
+  // Keep only messages within the time window that have a photo and aren't marked unavailable
+  const relevant = messages.filter(msg => {
+    if (msg.timestamp * 1000 < cutoffMs) return false;
+    if (!msg.hasMedia) return false;                          // no photo = "looking for" post
+    if (isUnavailableMessage(msg.body)) return false;        // 💾/❌ = already taken
+    return true;
+  });
+  console.log(`   ${relevant.length} messages with photos within last ${days} day(s).`);
 
   // Download all images in parallel (5 at a time) instead of sequentially
   const CONCURRENCY = 5;
@@ -202,7 +226,6 @@ async function runScan(days, msgsPerDay = 50) {
   for (let i = 0; i < relevant.length; i += CONCURRENCY) {
     const batch = relevant.slice(i, i + CONCURRENCY);
     await Promise.all(batch.map(async (msg, batchIdx) => {
-      if (!msg.hasMedia) return;
       try {
         const media = await msg.downloadMedia();
         if (media && media.mimetype?.startsWith('image/')) {
@@ -220,13 +243,14 @@ async function runScan(days, msgsPerDay = 50) {
 
   for (let idx = 0; idx < relevant.length; idx++) {
     const msg = relevant[idx];
+    const photoPath = photoPaths[idx];
+    if (!photoPath) continue;   // media wasn't an image or failed to download
+
     const rawAuthor = msg.author || msg._data?.author || '';
     const phone = rawAuthor.replace('@c.us', '') || targetGroupId;
     const senderName = msg._data?.notifyName || phone;
-    const photoPath = photoPaths[idx];
     const description = msg.body?.trim();
-
-    if (!description && !photoPath) continue;
+    const messageAt = new Date(msg.timestamp * 1000).toISOString();
 
     const itemId = saveItem({
       messageId: msg.id.id,
@@ -234,6 +258,7 @@ async function runScan(days, msgsPerDay = 50) {
       phone,
       senderName,
       photoPath,
+      messageAt,
     });
 
     if (itemId) saved++;

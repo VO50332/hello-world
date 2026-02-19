@@ -29,10 +29,14 @@ db.exec(`
     sender_name TEXT,                 -- Sender's display name
     photo_path  TEXT,                 -- Local path to saved photo (if any)
     is_taken    INTEGER DEFAULT 0,    -- 0 = available, 1 = taken
+    message_at  TEXT,                 -- When the original WhatsApp message was sent
     created_at  TEXT DEFAULT (datetime('now')),
     updated_at  TEXT DEFAULT (datetime('now'))
   )
 `);
+
+// Migrate existing databases that don't have message_at yet
+try { db.exec(`ALTER TABLE items ADD COLUMN message_at TEXT`); } catch (_) {}
 
 // --- Helper functions ---
 
@@ -40,13 +44,13 @@ db.exec(`
  * Save a new item from a WhatsApp message.
  * Returns the new item's ID, or null if it was a duplicate.
  */
-function saveItem({ messageId, description, phone, senderName, photoPath }) {
+function saveItem({ messageId, description, phone, senderName, photoPath, messageAt }) {
   try {
     const stmt = db.prepare(`
-      INSERT INTO items (message_id, description, phone, sender_name, photo_path)
-      VALUES (@messageId, @description, @phone, @senderName, @photoPath)
+      INSERT INTO items (message_id, description, phone, sender_name, photo_path, message_at)
+      VALUES (@messageId, @description, @phone, @senderName, @photoPath, @messageAt)
     `);
-    const result = stmt.run({ messageId, description, phone, senderName, photoPath });
+    const result = stmt.run({ messageId, description, phone, senderName, photoPath, messageAt: messageAt || null });
     return result.lastInsertRowid;
   } catch (err) {
     // UNIQUE constraint on message_id — this message was already processed
@@ -64,7 +68,7 @@ function getAvailableItems() {
   return db.prepare(`
     SELECT * FROM items
     WHERE is_taken = 0
-    ORDER BY created_at DESC
+    ORDER BY COALESCE(message_at, created_at) DESC
   `).all();
 }
 
@@ -74,7 +78,7 @@ function getAvailableItems() {
 function getAllItems() {
   return db.prepare(`
     SELECT * FROM items
-    ORDER BY created_at DESC
+    ORDER BY COALESCE(message_at, created_at) DESC
   `).all();
 }
 

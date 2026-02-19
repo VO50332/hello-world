@@ -133,41 +133,64 @@ client.on('disconnected', (reason) => {
 });
 
 // ── History scanner ───────────────────────────────────────────────────────────
-// Fetches the last `days` days of messages from the target group and saves
-// any new items to the database. Duplicate messages are automatically skipped.
-async function scanHistory(days) {
+// Tracks the state of the background scan so the status endpoint can report it.
+let scanState = { running: false, days: null, startedAt: null, result: null, error: null };
+
+function getScanState() {
+  return { ...scanState };
+}
+
+// Starts a background scan and returns immediately.
+// Call getScanState() to poll for progress.
+function startScan(days) {
+  if (scanState.running) return { alreadyRunning: true };
+
   if (!targetGroupId) {
-    throw new Error('Group ID not set. Add WHATSAPP_GROUP_ID to your .env file and restart.');
+    return { error: 'Group ID not set. Add WHATSAPP_GROUP_ID to your .env file and restart.' };
   }
   if (!targetGroupId.endsWith('@g.us')) {
-    throw new Error(`Invalid group ID "${targetGroupId}". It must end with @g.us (e.g. 120363XXXXXXXXXX@g.us). Check WHATSAPP_GROUP_ID in your .env file.`);
+    return { error: `Invalid group ID "${targetGroupId}". It must end with @g.us. Check WHATSAPP_GROUP_ID in your .env.` };
   }
 
+  scanState = { running: true, days, startedAt: new Date().toISOString(), result: null, error: null };
+
+  // Run in background — do NOT await
+  runScan(days).then(result => {
+    scanState = { running: false, days, startedAt: scanState.startedAt, result, error: null };
+  }).catch(err => {
+    const message = err?.message || String(err);
+    console.error('❌ Scan failed:', message);
+    scanState = { running: false, days, startedAt: scanState.startedAt, result: null, error: message };
+  });
+
+  return { started: true };
+}
+
+async function runScan(days) {
   const cutoffMs = Date.now() - days * 24 * 60 * 60 * 1000;
-  // Fetch enough messages to cover the requested period (cap at 3000)
   const limit = Math.min(days * 150, 3000);
 
-  console.log(`\n🔍 Scanning last ${days} day(s) — fetching up to ${limit} messages from ${targetGroupId}...`);
+  console.log(`\n🔍 Scanning last ${days} day(s) — fetching up to ${limit} messages...`);
 
   let chat;
   try {
     chat = await client.getChatById(targetGroupId);
   } catch (err) {
     const msg = err?.message || String(err);
-    throw new Error(`Could not load the group chat (ID: ${targetGroupId}). WhatsApp error: "${msg}". Make sure the group ID is correct and the bot is fully connected.`);
+    throw new Error(`Could not load the group chat. WhatsApp error: "${msg}". Make sure the group ID is correct and the bot is fully connected.`);
   }
 
   if (!chat) {
     throw new Error(`Group not found (ID: ${targetGroupId}). The bot may not be a member of this group.`);
   }
 
-  console.log(`   Found chat: "${chat.name}"`);
+  console.log(`   Found chat: "${chat.name}" — loading messages...`);
   const messages = await chat.fetchMessages({ limit });
+  console.log(`   Fetched ${messages.length} messages, processing...`);
 
   let saved = 0, skipped = 0;
 
   for (const msg of messages) {
-    // message.timestamp is in seconds
     if (msg.timestamp * 1000 < cutoffMs) continue;
 
     const rawAuthor = msg.author || msg._data?.author || '';
@@ -209,4 +232,4 @@ async function scanHistory(days) {
 
 client.initialize();
 
-module.exports = { client, scanHistory };
+module.exports = { client, startScan, getScanState };

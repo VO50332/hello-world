@@ -41,28 +41,33 @@ app.delete('/api/items/:id', (req, res) => {
   res.json({ ok: true });
 });
 
-// ── Scan endpoint ─────────────────────────────────────────────────────────────
-// GET /api/scan?days=7  — open this URL in your browser while the bot is running
-// to backfill the last N days of group messages into the database.
-app.get('/api/scan', async (req, res) => {
+// ── Scan endpoints ────────────────────────────────────────────────────────────
+// GET /api/scan?days=7  — starts a background scan and returns immediately.
+// GET /api/scan/status  — check whether the scan is still running and see results.
+app.get('/api/scan', (req, res) => {
   const days = Math.max(1, Math.min(Number(req.query.days) || 7, 90));
-  try {
-    // Lazy-require so this works even though server loads before bot
-    const { scanHistory } = require('../bot');
-    const result = await scanHistory(days);
-    res.json({ ok: true, days, ...result });
-  } catch (err) {
-    const message = err?.message || String(err);
-    console.error('❌ Scan failed:', message);
-    res.status(500).json({ ok: false, error: message });
-  }
+  const { startScan } = require('../bot');
+  const outcome = startScan(days);
+
+  if (outcome.error) return res.status(400).json({ ok: false, error: outcome.error });
+  if (outcome.alreadyRunning) return res.json({ ok: true, status: 'already_running', message: 'A scan is already in progress. Check /api/scan/status for updates.' });
+
+  res.json({ ok: true, status: 'started', days, message: `Scanning last ${days} days in the background. Open /api/scan/status to check progress.` });
+});
+
+app.get('/api/scan/status', (req, res) => {
+  const { getScanState } = require('../bot');
+  const state = getScanState();
+  const status = state.running ? 'running' : state.error ? 'error' : state.result ? 'done' : 'idle';
+  res.json({ ok: true, status, ...state });
 });
 
 // ── Start server ─────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`🌐 Website running at http://localhost:${PORT}`);
-  console.log(`   Scan last 7 days : http://localhost:${PORT}/api/scan?days=7`);
-  console.log(`   Scan last 30 days: http://localhost:${PORT}/api/scan?days=30`);
+  console.log(`   Start scan (7 days) : http://localhost:${PORT}/api/scan?days=7`);
+  console.log(`   Start scan (30 days): http://localhost:${PORT}/api/scan?days=30`);
+  console.log(`   Check scan progress : http://localhost:${PORT}/api/scan/status`);
 });
 
 module.exports = app;

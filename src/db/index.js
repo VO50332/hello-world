@@ -38,6 +38,23 @@ db.exec(`
 // Migrate existing databases that don't have message_at yet
 try { db.exec(`ALTER TABLE items ADD COLUMN message_at TEXT`); } catch (_) {}
 
+// ── Retroactive cleanup ───────────────────────────────────────────────────────
+// Enforce current rules against data that was saved before the rules existed.
+{
+  // 1. Remove items with no photo (those are "looking for" posts, not offers)
+  const noPhoto = db.prepare(`DELETE FROM items WHERE photo_path IS NULL`).run();
+
+  // 2. Remove items whose description contains 💾 or ❌ (unavailable markers)
+  const unavailable = db.prepare(`
+    DELETE FROM items WHERE description LIKE '%💾%' OR description LIKE '%❌%'
+  `).run();
+
+  const total = noPhoto.changes + unavailable.changes;
+  if (total > 0) {
+    console.log(`🧹 Cleaned up ${total} stale DB records (${noPhoto.changes} no-photo, ${unavailable.changes} unavailable).`);
+  }
+}
+
 // --- Helper functions ---
 
 /**

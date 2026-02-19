@@ -138,7 +138,7 @@ async function runScanAll(groupIds, configMap, days, msgsPerDay, keywords) {
 
 async function runScan(groupId, groupName, days, msgsPerDay = 100, keywords = []) {
   const cutoffMs = Date.now() - days * 24 * 60 * 60 * 1000;
-  const limit = Math.min(days * msgsPerDay, 5000);
+  const limit = days * msgsPerDay;
 
   const keywordLabel = keywords.length ? ` | keywords: ${keywords.join(', ')}` : '';
   console.log(`\n🔍 [${groupName}] Scanning last ${days} day(s) — up to ${limit} messages${keywordLabel}...`);

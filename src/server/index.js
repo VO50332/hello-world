@@ -104,7 +104,7 @@ app.get('/api/chats', async (req, res) => {
 
 app.get('/api/scan', (req, res) => {
   const days = Math.max(1, Math.min(Number(req.query.days) || 7, 180));
-  const msgsPerDay = Math.max(10, Math.min(Number(req.query.msgsPerDay) || 100, 500));
+  const msgsPerDay = Math.max(1, Number(req.query.msgsPerDay) || 500);
   const keywords = req.query.keywords
     ? req.query.keywords.split(',').map(k => k.trim().toLowerCase()).filter(Boolean)
     : [];

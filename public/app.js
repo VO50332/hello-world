@@ -378,7 +378,7 @@ async function triggerScan() {
   const statusEl = document.getElementById('scan-status');
   const btn = document.getElementById('scanBtn');
 
-  let url = `/api/scan?days=${encodeURIComponent(days)}&msgsPerDay=150`;
+  let url = `/api/scan?days=${encodeURIComponent(days)}&msgsPerDay=500`;
   if (rawKeywords) url += `&keywords=${encodeURIComponent(rawKeywords)}`;
   if (groupId) url += `&groupId=${encodeURIComponent(groupId)}`;
 

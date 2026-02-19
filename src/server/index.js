@@ -42,8 +42,21 @@ app.delete('/api/items/:id', (req, res) => {
 });
 
 // ── Scan endpoints ────────────────────────────────────────────────────────────
+// GET /api/chats   — list all WhatsApp groups the bot is a member of.
 // GET /api/scan?days=7  — starts a background scan and returns immediately.
 // GET /api/scan/status  — check whether the scan is still running and see results.
+app.get('/api/chats', async (req, res) => {
+  try {
+    const { client } = require('../bot');
+    const chats = await client.getChats();
+    const groups = chats
+      .filter(c => c.isGroup)
+      .map(c => ({ id: c.id._serialized, name: c.name, participants: c.participants?.length ?? '?' }));
+    res.json({ ok: true, groups });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || String(err) });
+  }
+});
 app.get('/api/scan', (req, res) => {
   const days = Math.max(1, Math.min(Number(req.query.days) || 7, 90));
   // msgsPerDay controls how many messages are fetched per day (default 50, max 300)

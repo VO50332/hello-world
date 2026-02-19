@@ -66,9 +66,16 @@ client.on('disconnected', (reason) => {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-// Returns true if the message text contains markers meaning "no longer available"
+// Returns true if the message body text contains markers meaning "no longer available"
 function isUnavailableMessage(text) {
   return text ? /💾|❌/.test(text) : false;
+}
+
+// Returns true if the message has been reacted to with 💾 or ❌ (= no longer available)
+function hasUnavailableReaction(msg) {
+  const reactions = msg._data?.reactions;
+  if (!Array.isArray(reactions) || reactions.length === 0) return false;
+  return reactions.some(r => r.aggregateEmoji === '💾' || r.aggregateEmoji === '❌');
 }
 
 // Returns true when the text matches at least one keyword.
@@ -159,6 +166,7 @@ async function runScan(groupId, groupName, days, msgsPerDay = 100, keywords = []
     if (msg.timestamp * 1000 < cutoffMs) return false;
     if (!msg.hasMedia) return false;
     if (isUnavailableMessage(msg.body)) return false;
+    if (hasUnavailableReaction(msg)) return false;
     if (!matchesKeywords(msg.body, keywords)) return false;
     return true;
   });

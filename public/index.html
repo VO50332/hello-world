@@ -30,6 +30,35 @@
   <!-- Group filter tabs (shown only when multiple groups exist) -->
   <div id="group-tabs" style="display:none"></div>
 
+  <!-- Groups management panel -->
+  <div id="groups-panel">
+    <details id="groups-details">
+      <summary>⚙️ ניהול קבוצות</summary>
+      <div class="groups-settings-body">
+
+        <div class="groups-section">
+          <h4>קבוצות מוגדרות</h4>
+          <div id="configured-groups-list"></div>
+        </div>
+
+        <div class="groups-section">
+          <h4>הוסף קבוצה</h4>
+          <p id="chats-status" class="chats-status-msg"></p>
+          <input
+            type="search"
+            id="groupSearchInput"
+            placeholder="חפש לפי שם קבוצה..."
+            autocomplete="off"
+            dir="rtl"
+          />
+          <div id="available-groups-list"></div>
+          <button class="btn-refresh-chats" onclick="fetchAvailableChats()">רענן רשימה</button>
+        </div>
+
+      </div>
+    </details>
+  </div>
+
   <!-- Scan control panel -->
   <div id="scan-panel">
     <details>

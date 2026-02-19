@@ -41,6 +41,34 @@ try { db.exec(`ALTER TABLE items ADD COLUMN message_at TEXT`); } catch (_) {}
 // Migrate: add group_id for multi-group support
 try { db.exec(`ALTER TABLE items ADD COLUMN group_id TEXT DEFAULT ''`); } catch (_) {}
 
+// Groups configuration table — managed via the web UI.
+// Seeded from .env on the very first run so existing setups keep working.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS configured_groups (
+    id   TEXT PRIMARY KEY,
+    name TEXT NOT NULL
+  )
+`);
+{
+  const { c } = db.prepare('SELECT COUNT(*) as c FROM configured_groups').get();
+  if (c === 0) {
+    const insert = db.prepare('INSERT OR IGNORE INTO configured_groups (id, name) VALUES (?, ?)');
+    if (process.env.WHATSAPP_GROUPS) {
+      for (const entry of process.env.WHATSAPP_GROUPS.split(',').map(s => s.trim()).filter(Boolean)) {
+        const sep = entry.indexOf(':');
+        const id   = sep !== -1 ? entry.slice(0, sep) : entry;
+        const name = sep !== -1 ? entry.slice(sep + 1) : entry;
+        if (id.endsWith('@g.us')) insert.run(id, name);
+      }
+    } else if (process.env.WHATSAPP_GROUP_ID) {
+      insert.run(
+        process.env.WHATSAPP_GROUP_ID,
+        process.env.WHATSAPP_GROUP_NAME || process.env.WHATSAPP_GROUP_ID,
+      );
+    }
+  }
+}
+
 // ── Retroactive cleanup ───────────────────────────────────────────────────────
 // Enforce current rules against data that was saved before the rules existed.
 {
@@ -172,8 +200,24 @@ function deleteLatestItemByPhone(phone) {
   return result.changes > 0;
 }
 
+/** Return all groups in the configured_groups table. */
+function getConfiguredGroups() {
+  return db.prepare('SELECT id, name FROM configured_groups ORDER BY name').all();
+}
+
+/** Add or rename a configured group. */
+function addConfiguredGroup(id, name) {
+  db.prepare('INSERT OR REPLACE INTO configured_groups (id, name) VALUES (?, ?)').run(id, name);
+}
+
+/** Remove a configured group by ID. */
+function removeConfiguredGroup(id) {
+  db.prepare('DELETE FROM configured_groups WHERE id = ?').run(id);
+}
+
 module.exports = {
   saveItem, getAvailableItems, getAllItems, getGroupIds,
   markItemTaken, markItemAvailable, deleteItem,
   deleteItemByMessageId, deleteLatestItemByPhone,
+  getConfiguredGroups, addConfiguredGroup, removeConfiguredGroup,
 };

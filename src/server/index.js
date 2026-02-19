@@ -3,7 +3,11 @@
 
 const express = require('express');
 const path = require('path');
-const { getAvailableItems, getAllItems, getGroupIds, markItemTaken, markItemAvailable, deleteItem } = require('../db');
+const {
+  getAvailableItems, getAllItems, getGroupIds,
+  markItemTaken, markItemAvailable, deleteItem,
+  getConfiguredGroups, addConfiguredGroup, removeConfiguredGroup,
+} = require('../db');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -16,20 +20,33 @@ app.use(express.static(path.join(__dirname, '../../public')));
 
 // ── API Routes ───────────────────────────────────────────────────────────────
 
-// GET /api/groups — return configured groups (id + name) and which IDs exist in DB
+// GET /api/groups — return configured groups (id + name) + any legacy DB-only groups
 app.get('/api/groups', (req, res) => {
-  const { groupsConfig } = require('../bot');
+  const configured = getConfiguredGroups();          // [{id, name}] from DB
   const dbIds = new Set(getGroupIds());
-  const groups = [...groupsConfig.entries()].map(([id, name]) => ({
-    id,
-    name,
-    hasItems: dbIds.has(id),
-  }));
-  // Also include any groups in DB not in config (e.g. old data)
+  const groups = configured.map(g => ({ ...g, hasItems: dbIds.has(g.id) }));
+  // Also surface any groups that have items in the DB but aren't configured
   for (const id of dbIds) {
-    if (!groupsConfig.has(id)) groups.push({ id, name: id, hasItems: true });
+    if (!groups.find(g => g.id === id)) groups.push({ id, name: id, hasItems: true });
   }
   res.json(groups);
+});
+
+// POST /api/groups — add (or rename) a configured group
+// Body: { id: "120363XXX@g.us", name: "קח תן רוממה" }
+app.post('/api/groups', (req, res) => {
+  const { id, name } = req.body || {};
+  if (!id || !id.endsWith('@g.us')) {
+    return res.status(400).json({ ok: false, error: 'מזהה קבוצה לא תקין — חייב להסתיים ב-@g.us' });
+  }
+  addConfiguredGroup(id, name || id);
+  res.json({ ok: true });
+});
+
+// DELETE /api/groups/:id — remove a configured group (does NOT delete its items)
+app.delete('/api/groups/:id', (req, res) => {
+  removeConfiguredGroup(req.params.id);
+  res.json({ ok: true });
 });
 
 // GET /api/items — return available items (used by the website)
@@ -60,14 +77,14 @@ app.delete('/api/items/:id', (req, res) => {
 });
 
 // ── Scan endpoints ────────────────────────────────────────────────────────────
-// GET /api/chats   — list all WhatsApp groups the bot is a member of.
-// GET /api/scan?days=7  — starts a background scan and returns immediately.
-// GET /api/scan/status  — check whether the scan is still running and see results.
+// GET /api/chats         — list all WhatsApp groups the bot is a member of.
+// GET /api/scan?days=7   — starts a background scan and returns immediately.
+// GET /api/scan/status   — check whether the scan is still running and see results.
 app.get('/api/chats', async (req, res) => {
   try {
     const { client, isReady } = require('../bot');
     if (!isReady()) {
-      return res.status(503).json({ ok: false, error: 'WhatsApp client is not ready yet. Wait for the QR code to be scanned and the bot to print "✅ Bot is running!", then try again.' });
+      return res.status(503).json({ ok: false, error: 'WhatsApp client is not ready yet. Wait for the QR code to be scanned and the bot to print "✅ WhatsApp ready!", then try again.' });
     }
     const chats = await client.getChats();
     const groups = chats
@@ -78,6 +95,7 @@ app.get('/api/chats', async (req, res) => {
     res.status(500).json({ ok: false, error: err?.message || String(err) });
   }
 });
+
 app.get('/api/scan', (req, res) => {
   const days = Math.max(1, Math.min(Number(req.query.days) || 7, 180));
   const msgsPerDay = Math.max(10, Math.min(Number(req.query.msgsPerDay) || 100, 500));

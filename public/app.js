@@ -14,6 +14,7 @@ let activeGroupId = null; // null = all groups
 // Load groups and items when the page opens
 document.addEventListener('DOMContentLoaded', () => {
   loadGroups().then(loadItems);
+  initGroupsPanel();
 });
 showTakenCheckbox.addEventListener('change', loadItems);
 
@@ -236,6 +237,129 @@ document.addEventListener('keydown', (e) => {
 
 // Refresh the list every 30 seconds automatically
 setInterval(loadItems, 30_000);
+
+// ── Groups management panel ───────────────────────────────────────────────────
+
+let availableChats = [];   // all WhatsApp groups from /api/chats
+let chatsFetched = false;
+
+function initGroupsPanel() {
+  const details = document.getElementById('groups-details');
+  // Lazy-load the available chats list the first time the panel is opened
+  details.addEventListener('toggle', () => {
+    if (details.open && !chatsFetched) fetchAvailableChats();
+    renderConfiguredGroups();
+  });
+  document.getElementById('groupSearchInput').addEventListener('input', e => {
+    renderAvailableGroups(e.target.value);
+  });
+}
+
+async function fetchAvailableChats() {
+  const statusEl = document.getElementById('chats-status');
+  statusEl.textContent = '⏳ טוען רשימת קבוצות מ-WhatsApp...';
+  try {
+    const res = await fetch('/api/chats');
+    const data = await res.json();
+    if (data.ok) {
+      availableChats = data.groups || [];
+      chatsFetched = true;
+      statusEl.textContent = availableChats.length
+        ? `נמצאו ${availableChats.length} קבוצות — חפש לפי שם:`
+        : 'לא נמצאו קבוצות';
+    } else {
+      statusEl.textContent = `⚠️ ${data.error}`;
+    }
+  } catch (err) {
+    statusEl.textContent = `⚠️ שגיאת רשת: ${err.message}`;
+  }
+  renderAvailableGroups('');
+}
+
+function renderConfiguredGroups() {
+  const list = document.getElementById('configured-groups-list');
+  list.innerHTML = '';
+  if (groups.length === 0) {
+    list.innerHTML = '<p class="no-groups-msg">אין קבוצות מוגדרות עדיין</p>';
+    return;
+  }
+  for (const g of groups) {
+    const row = document.createElement('div');
+    row.className = 'configured-group-row';
+
+    const nameSpan = document.createElement('span');
+    nameSpan.textContent = g.name;
+    nameSpan.title = g.id;
+
+    const idSmall = document.createElement('small');
+    idSmall.textContent = g.id;
+
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'btn btn-delete btn-sm';
+    removeBtn.textContent = 'הסר';
+    removeBtn.onclick = async () => {
+      await fetch('/api/groups/' + encodeURIComponent(g.id), { method: 'DELETE' });
+      await loadGroups();
+      renderConfiguredGroups();
+      renderAvailableGroups(document.getElementById('groupSearchInput').value);
+    };
+
+    row.appendChild(nameSpan);
+    row.appendChild(idSmall);
+    row.appendChild(removeBtn);
+    list.appendChild(row);
+  }
+}
+
+function renderAvailableGroups(query) {
+  const list = document.getElementById('available-groups-list');
+  list.innerHTML = '';
+  if (!chatsFetched) return;
+
+  const q = query.trim().toLowerCase();
+  const configuredIds = new Set(groups.map(g => g.id));
+  const filtered = availableChats.filter(c =>
+    !configuredIds.has(c.id) && (!q || c.name.toLowerCase().includes(q))
+  );
+
+  if (filtered.length === 0) {
+    list.innerHTML = `<p class="no-groups-msg">${
+      availableChats.length === 0 ? 'לא נמצאו קבוצות' : 'כל הקבוצות כבר מוגדרות'
+    }</p>`;
+    return;
+  }
+
+  for (const chat of filtered.slice(0, 30)) {
+    const row = document.createElement('div');
+    row.className = 'available-group-row';
+
+    const nameSpan = document.createElement('span');
+    nameSpan.textContent = chat.name;
+
+    const countSmall = document.createElement('small');
+    countSmall.textContent = `${chat.participants} משתתפים`;
+
+    const addBtn = document.createElement('button');
+    addBtn.className = 'btn btn-scan btn-sm';
+    addBtn.textContent = 'הוסף';
+    addBtn.onclick = async () => {
+      addBtn.disabled = true;
+      await fetch('/api/groups', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: chat.id, name: chat.name }),
+      });
+      await loadGroups();
+      renderConfiguredGroups();
+      renderAvailableGroups(document.getElementById('groupSearchInput').value);
+    };
+
+    row.appendChild(nameSpan);
+    row.appendChild(countSmall);
+    row.appendChild(addBtn);
+    list.appendChild(row);
+  }
+}
 
 // ── Scan panel ────────────────────────────────────────────────────────────────
 

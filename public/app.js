@@ -9,13 +9,73 @@ const searchInput = document.getElementById('searchInput');
 
 // All items fetched from the server — filtering happens client-side
 let allItems = [];
+let activeGroupId = null; // null = all groups
 
-// Load from server when page opens or "show taken" changes
-document.addEventListener('DOMContentLoaded', loadItems);
+// Load groups and items when the page opens
+document.addEventListener('DOMContentLoaded', () => {
+  loadGroups().then(loadItems);
+});
 showTakenCheckbox.addEventListener('change', loadItems);
 
 // Filter locally as the user types — no extra network request
 searchInput.addEventListener('input', renderItems);
+
+// ── Groups ─────────────────────────────────────────────────────────────────
+
+let groups = []; // [{id, name, hasItems}]
+
+async function loadGroups() {
+  try {
+    const res = await fetch('/api/groups');
+    groups = await res.json();
+    renderGroupTabs();
+    populateScanGroupSelect();
+  } catch (_) { /* groups tab is optional */ }
+}
+
+function renderGroupTabs() {
+  const tabsEl = document.getElementById('group-tabs');
+  if (groups.length < 2) { tabsEl.style.display = 'none'; return; }
+
+  tabsEl.style.display = 'flex';
+  tabsEl.innerHTML = '';
+
+  const allBtn = makeTab('הכל', null);
+  tabsEl.appendChild(allBtn);
+  for (const g of groups) {
+    tabsEl.appendChild(makeTab(g.name, g.id));
+  }
+}
+
+function makeTab(label, groupId) {
+  const btn = document.createElement('button');
+  btn.className = 'group-tab' + (activeGroupId === groupId ? ' active' : '');
+  btn.textContent = label;
+  btn.onclick = () => {
+    activeGroupId = groupId;
+    document.querySelectorAll('.group-tab').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    loadItems();
+  };
+  return btn;
+}
+
+function populateScanGroupSelect() {
+  const sel = document.getElementById('scanGroupSelect');
+  const label = document.getElementById('scanGroupLabel');
+  if (groups.length < 2) { label.style.display = 'none'; return; }
+
+  label.style.display = '';
+  sel.innerHTML = '<option value="">כל הקבוצות</option>';
+  for (const g of groups) {
+    const opt = document.createElement('option');
+    opt.value = g.id;
+    opt.textContent = g.name;
+    sel.appendChild(opt);
+  }
+}
+
+// ── Items ──────────────────────────────────────────────────────────────────
 
 async function loadItems() {
   loading.style.display = 'block';
@@ -24,7 +84,10 @@ async function loadItems() {
 
   try {
     const showAll = showTakenCheckbox.checked;
-    const res = await fetch(`/api/items${showAll ? '?all=true' : ''}`);
+    let url = `/api/items${showAll ? '?all=true' : ''}`;
+    if (activeGroupId) url += `${showAll ? '&' : '?'}group=${encodeURIComponent(activeGroupId)}`;
+
+    const res = await fetch(url);
     allItems = await res.json();
     loading.style.display = 'none';
     renderItems();
@@ -42,12 +105,8 @@ function renderItems() {
     ? allItems.filter(item => item.description?.toLowerCase().includes(query))
     : allItems;
 
-  if (visible.length === 0) {
-    empty.style.display = 'block';
-  } else {
-    empty.style.display = 'none';
-    visible.forEach(item => grid.appendChild(createCard(item)));
-  }
+  empty.style.display = visible.length === 0 ? 'block' : 'none';
+  visible.forEach(item => grid.appendChild(createCard(item)));
 }
 
 function createCard(item) {
@@ -181,11 +240,13 @@ let scanPoller = null;
 async function triggerScan() {
   const days = document.getElementById('scanDays').value || 30;
   const rawKeywords = document.getElementById('scanKeywords').value.trim();
+  const groupId = document.getElementById('scanGroupSelect')?.value || '';
   const statusEl = document.getElementById('scan-status');
   const btn = document.getElementById('scanBtn');
 
   let url = `/api/scan?days=${encodeURIComponent(days)}&msgsPerDay=150`;
   if (rawKeywords) url += `&keywords=${encodeURIComponent(rawKeywords)}`;
+  if (groupId) url += `&groupId=${encodeURIComponent(groupId)}`;
 
   btn.disabled = true;
   statusEl.style.display = 'block';

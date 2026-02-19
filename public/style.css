@@ -72,6 +72,34 @@ header .subtitle {
   accent-color: white;
 }
 
+/* ── Group filter tabs ────────────────────────────────────────── */
+#group-tabs {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.6rem 2rem;
+  background: #fff;
+  border-bottom: 1px solid #dde3ec;
+  flex-wrap: wrap;
+}
+
+.group-tab {
+  padding: 0.35rem 1rem;
+  border: 1px solid #c8d4e0;
+  border-radius: 20px;
+  background: #f5f7fa;
+  color: #444;
+  font-size: 0.88rem;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.group-tab:hover { background: #e4eefc; }
+.group-tab.active {
+  background: #25d366;
+  color: white;
+  border-color: #25d366;
+  font-weight: 600;
+}
+
 /* ── Scan panel ───────────────────────────────────────────────── */
 #scan-panel {
   background: #fff;

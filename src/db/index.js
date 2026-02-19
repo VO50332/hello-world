@@ -38,6 +38,9 @@ db.exec(`
 // Migrate existing databases that don't have message_at yet
 try { db.exec(`ALTER TABLE items ADD COLUMN message_at TEXT`); } catch (_) {}
 
+// Migrate: add group_id for multi-group support
+try { db.exec(`ALTER TABLE items ADD COLUMN group_id TEXT DEFAULT ''`); } catch (_) {}
+
 // ── Retroactive cleanup ───────────────────────────────────────────────────────
 // Enforce current rules against data that was saved before the rules existed.
 {
@@ -61,42 +64,58 @@ try { db.exec(`ALTER TABLE items ADD COLUMN message_at TEXT`); } catch (_) {}
  * Save a new item from a WhatsApp message.
  * Returns the new item's ID, or null if it was a duplicate.
  */
-function saveItem({ messageId, description, phone, senderName, photoPath, messageAt }) {
+function saveItem({ messageId, description, phone, senderName, photoPath, messageAt, groupId = '' }) {
   try {
     const stmt = db.prepare(`
-      INSERT INTO items (message_id, description, phone, sender_name, photo_path, message_at)
-      VALUES (@messageId, @description, @phone, @senderName, @photoPath, @messageAt)
+      INSERT INTO items (message_id, description, phone, sender_name, photo_path, message_at, group_id)
+      VALUES (@messageId, @description, @phone, @senderName, @photoPath, @messageAt, @groupId)
     `);
-    const result = stmt.run({ messageId, description, phone, senderName, photoPath, messageAt: messageAt || null });
+    const result = stmt.run({ messageId, description, phone, senderName, photoPath, messageAt: messageAt || null, groupId });
     return result.lastInsertRowid;
   } catch (err) {
-    // UNIQUE constraint on message_id — this message was already processed
-    if (err.message.includes('UNIQUE constraint failed')) {
-      return null;
-    }
+    if (err.message.includes('UNIQUE constraint failed')) return null;
     throw err;
   }
 }
 
 /**
  * Return all available (not taken) items, newest first.
+ * Pass groupId to restrict to a single group.
  */
-function getAvailableItems() {
+function getAvailableItems(groupId = null) {
+  if (groupId) {
+    return db.prepare(`
+      SELECT * FROM items WHERE is_taken = 0 AND group_id = ?
+      ORDER BY COALESCE(message_at, created_at) DESC
+    `).all(groupId);
+  }
   return db.prepare(`
-    SELECT * FROM items
-    WHERE is_taken = 0
+    SELECT * FROM items WHERE is_taken = 0
     ORDER BY COALESCE(message_at, created_at) DESC
   `).all();
 }
 
 /**
  * Return all items regardless of status, newest first.
+ * Pass groupId to restrict to a single group.
  */
-function getAllItems() {
+function getAllItems(groupId = null) {
+  if (groupId) {
+    return db.prepare(`
+      SELECT * FROM items WHERE group_id = ?
+      ORDER BY COALESCE(message_at, created_at) DESC
+    `).all(groupId);
+  }
   return db.prepare(`
-    SELECT * FROM items
-    ORDER BY COALESCE(message_at, created_at) DESC
+    SELECT * FROM items ORDER BY COALESCE(message_at, created_at) DESC
   `).all();
+}
+
+/**
+ * Return distinct group IDs present in the DB.
+ */
+function getGroupIds() {
+  return db.prepare(`SELECT DISTINCT group_id FROM items WHERE group_id != ''`).all().map(r => r.group_id);
 }
 
 /**
@@ -154,7 +173,7 @@ function deleteLatestItemByPhone(phone) {
 }
 
 module.exports = {
-  saveItem, getAvailableItems, getAllItems,
+  saveItem, getAvailableItems, getAllItems, getGroupIds,
   markItemTaken, markItemAvailable, deleteItem,
   deleteItemByMessageId, deleteLatestItemByPhone,
 };

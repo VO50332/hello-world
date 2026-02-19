@@ -27,6 +27,9 @@
     </div>
   </header>
 
+  <!-- Group filter tabs (shown only when multiple groups exist) -->
+  <div id="group-tabs" style="display:none"></div>
+
   <!-- Scan control panel -->
   <div id="scan-panel">
     <details>
@@ -35,6 +38,9 @@
         <div class="scan-row">
           <label>מספר ימים לסרוק
             <input type="number" id="scanDays" value="30" min="1" max="180" />
+          </label>
+          <label id="scanGroupLabel" style="display:none">קבוצה לסריקה
+            <select id="scanGroupSelect"></select>
           </label>
           <label>מילות מפתח (מופרדות בפסיקות)
             <input type="text" id="scanKeywords" placeholder='לדוגמה: כיסא,ספה,מיטה' dir="rtl" />

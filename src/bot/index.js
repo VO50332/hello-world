@@ -9,12 +9,35 @@ const path = require('path');
 const { saveItem, deleteItemByMessageId, deleteLatestItemByPhone } = require('../db');
 
 // ── Configuration ────────────────────────────────────────────────────────────
-const TARGET_GROUP_NAME = process.env.WHATSAPP_GROUP_NAME || 'שוק מתנות';
 
-// WHATSAPP_GROUP_ID lets you skip the slow group-name lookup entirely.
-// The bot will print the ID of every group that sends a message — copy it
-// from the log and add it to your .env file as WHATSAPP_GROUP_ID=<id>.
-let targetGroupId = process.env.WHATSAPP_GROUP_ID || null;
+// Multi-group support.
+//
+// New format — supports multiple groups (recommended):
+//   WHATSAPP_GROUPS=120363AAA@g.us:שוק מתנות,120363BBB@g.us:קבוצה נוספת
+//
+// Legacy format — single group (still works):
+//   WHATSAPP_GROUP_ID=120363AAA@g.us
+//   WHATSAPP_GROUP_NAME=שוק מתנות
+//
+// groupsConfig: Map<groupId → displayName>
+function parseGroupsConfig() {
+  if (process.env.WHATSAPP_GROUPS) {
+    const map = new Map();
+    for (const entry of process.env.WHATSAPP_GROUPS.split(',').map(s => s.trim()).filter(Boolean)) {
+      const sep = entry.indexOf(':');
+      if (sep === -1) map.set(entry, entry);
+      else map.set(entry.slice(0, sep), entry.slice(sep + 1));
+    }
+    return map;
+  }
+  if (process.env.WHATSAPP_GROUP_ID) {
+    return new Map([[process.env.WHATSAPP_GROUP_ID, process.env.WHATSAPP_GROUP_NAME || process.env.WHATSAPP_GROUP_ID]]);
+  }
+  return new Map();
+}
+
+const groupsConfig = parseGroupsConfig();   // Map<groupId → name>
+const targetGroupIds = new Set(groupsConfig.keys());
 
 // SCAN_KEYWORDS: comma-separated words (Hebrew or any language).
 // When set, the bot will only save messages whose description contains
@@ -63,12 +86,13 @@ client.on('auth_failure', (msg) => {
 
 client.on('ready', () => {
   clientReady = true;
-  if (targetGroupId) {
-    console.log(`✅ Bot is running! Monitoring group: "${TARGET_GROUP_NAME}" (${targetGroupId})`);
+  if (targetGroupIds.size > 0) {
+    console.log(`✅ Bot is running! Monitoring ${targetGroupIds.size} group(s):`);
+    for (const [id, name] of groupsConfig) console.log(`   • "${name}" (${id})`);
   } else {
-    console.log(`✅ Bot is ready. Waiting to identify group "${TARGET_GROUP_NAME}"...`);
+    console.log('✅ Bot is ready. No groups configured yet.');
     console.log('   When any group message arrives, its ID will be printed here.');
-    console.log('   Copy the correct ID into your .env as: WHATSAPP_GROUP_ID=<id>');
+    console.log('   Add to your .env: WHATSAPP_GROUPS=<id>:Group Name');
   }
 });
 
@@ -91,22 +115,24 @@ client.on('message_create', async (message) => {
     // Only handle group messages
     if (!message.from.endsWith('@g.us')) return;
 
-    // If WHATSAPP_GROUP_ID is not set yet, log every group's ID to help the user find theirs
-    if (!targetGroupId) {
-      console.log(`📋 Group message received — Group ID: ${message.from}`);
-      console.log(`   If this is "${TARGET_GROUP_NAME}", add to your .env:`);
-      console.log(`   WHATSAPP_GROUP_ID=${message.from}`);
+    // Discovery mode — no groups configured yet, just print IDs to help setup
+    if (targetGroupIds.size === 0) {
+      console.log(`📋 Group message received — ID: ${message.from}`);
+      console.log(`   Add to your .env: WHATSAPP_GROUPS=${message.from}:Group Name`);
       return;
     }
 
-    if (message.from !== targetGroupId) return;
+    if (!targetGroupIds.has(message.from)) return;
+
+    const groupId = message.from;
+    const groupName = groupsConfig.get(groupId) || groupId;
 
     // Read sender info directly from the message data — no Puppeteer call needed
     const rawAuthor = message.author || message._data?.author || '';
     const phone = rawAuthor.replace('@c.us', '') || message.from;
     const senderName = message._data?.notifyName || phone;
 
-    console.log(`📨 New message in "${TARGET_GROUP_NAME}" from ${senderName}`);
+    console.log(`📨 [${groupName}] New message from ${senderName}`);
 
     const description = message.body?.trim();
 
@@ -179,6 +205,7 @@ client.on('message_create', async (message) => {
       senderName,
       photoPath,
       messageAt,
+      groupId,
     });
 
     if (itemId) {
@@ -195,7 +222,7 @@ client.on('message_create', async (message) => {
 // Fires when someone edits a message (e.g. seller adds 💾/❌ to their own post).
 client.on('message_edit', (message, newBody) => {
   try {
-    if (message.from !== targetGroupId) return;
+    if (!targetGroupIds.has(message.from)) return;
     if (!isUnavailableMessage(newBody)) return;
 
     const removed = deleteItemByMessageId(message.id.id);
@@ -223,67 +250,79 @@ function getScanState() {
 }
 
 // Starts a background scan and returns immediately.
-// Call getScanState() to poll for progress.
-function startScan(days, msgsPerDay, keywords = []) {
+// groupId: which group to scan. If omitted, scans all configured groups sequentially.
+function startScan(days, msgsPerDay, keywords = [], groupId = null) {
   if (scanState.running) return { alreadyRunning: true };
 
-  if (!targetGroupId) {
-    return { error: 'Group ID not set. Add WHATSAPP_GROUP_ID to your .env file and restart.' };
+  const idsToScan = groupId
+    ? [groupId]
+    : [...targetGroupIds];
+
+  if (idsToScan.length === 0) {
+    return { error: 'No groups configured. Add WHATSAPP_GROUPS to your .env file and restart.' };
   }
-  if (!targetGroupId.endsWith('@g.us')) {
-    return { error: `Invalid group ID "${targetGroupId}". It must end with @g.us. Check WHATSAPP_GROUP_ID in your .env.` };
+  for (const id of idsToScan) {
+    if (!id.endsWith('@g.us')) {
+      return { error: `Invalid group ID "${id}". It must end with @g.us.` };
+    }
   }
 
-  scanState = { running: true, days, keywords, startedAt: new Date().toISOString(), result: null, error: null };
+  scanState = { running: true, days, keywords, groupId, startedAt: new Date().toISOString(), result: null, error: null };
 
   // Run in background — do NOT await
-  runScan(days, msgsPerDay, keywords).then(result => {
-    scanState = { running: false, days, keywords, startedAt: scanState.startedAt, result, error: null };
+  runScanAll(idsToScan, days, msgsPerDay, keywords).then(result => {
+    scanState = { running: false, days, keywords, groupId, startedAt: scanState.startedAt, result, error: null };
   }).catch(err => {
     const message = err?.message || String(err);
     console.error('❌ Scan failed:', message);
-    scanState = { running: false, days, keywords, startedAt: scanState.startedAt, result: null, error: message };
+    scanState = { running: false, days, keywords, groupId, startedAt: scanState.startedAt, result: null, error: message };
   });
 
   return { started: true };
 }
 
-async function runScan(days, msgsPerDay = 50, keywords = []) {
+// Scan multiple groups sequentially and aggregate results.
+async function runScanAll(groupIds, days, msgsPerDay, keywords) {
+  let totalFetched = 0, totalWithinWindow = 0, totalSaved = 0, totalSkipped = 0;
+  for (const id of groupIds) {
+    const r = await runScan(id, days, msgsPerDay, keywords);
+    totalFetched += r.fetched;
+    totalWithinWindow += r.withinWindow;
+    totalSaved += r.saved;
+    totalSkipped += r.skipped;
+  }
+  return { fetched: totalFetched, withinWindow: totalWithinWindow, saved: totalSaved, skipped: totalSkipped };
+}
+
+async function runScan(groupId, days, msgsPerDay = 100, keywords = []) {
+  const groupName = groupsConfig.get(groupId) || groupId;
   const cutoffMs = Date.now() - days * 24 * 60 * 60 * 1000;
   const limit = Math.min(days * msgsPerDay, 5000);
 
   const keywordLabel = keywords.length ? ` | keywords: ${keywords.join(', ')}` : '';
-  console.log(`\n🔍 Scanning last ${days} day(s) — up to ${limit} messages${keywordLabel}...`);
+  console.log(`\n🔍 [${groupName}] Scanning last ${days} day(s) — up to ${limit} messages${keywordLabel}...`);
 
   let chat;
   try {
-    chat = await client.getChatById(targetGroupId);
+    chat = await client.getChatById(groupId);
   } catch (err) {
-    const msg = err?.message || String(err);
-    throw new Error(`Could not load the group chat. WhatsApp error: "${msg}". Make sure the group ID is correct and the bot is fully connected.`);
+    throw new Error(`Could not load "${groupName}": ${err?.message || err}`);
   }
-
-  if (!chat) {
-    throw new Error(`Group not found (ID: ${targetGroupId}). The bot may not be a member of this group.`);
-  }
+  if (!chat) throw new Error(`Group not found: "${groupName}" (${groupId})`);
 
   console.log(`   Found chat: "${chat.name}" — loading messages...`);
   const messages = await chat.fetchMessages({ limit });
   console.log(`   Fetched ${messages.length} messages, processing...`);
 
-  // Keep only messages within the time window that have a photo, aren't marked
-  // unavailable, and (if keywords are set) contain at least one keyword.
-  // Keyword filtering here avoids downloading images for irrelevant posts.
   const relevant = messages.filter(msg => {
     if (msg.timestamp * 1000 < cutoffMs) return false;
-    if (!msg.hasMedia) return false;                          // no photo = "looking for" post
-    if (isUnavailableMessage(msg.body)) return false;        // 💾/❌ = already taken
-    if (!matchesKeywords(msg.body, keywords)) return false;  // keyword filter
+    if (!msg.hasMedia) return false;
+    if (isUnavailableMessage(msg.body)) return false;
+    if (!matchesKeywords(msg.body, keywords)) return false;
     return true;
   });
-  console.log(`   ${relevant.length} messages with photos within last ${days} day(s).`);
+  console.log(`   ${relevant.length} relevant messages with photos.`);
 
-  // Download all images in parallel (5 at a time) instead of sequentially
   const CONCURRENCY = 5;
   const photoPaths = new Array(relevant.length).fill(null);
 
@@ -308,10 +347,10 @@ async function runScan(days, msgsPerDay = 50, keywords = []) {
   for (let idx = 0; idx < relevant.length; idx++) {
     const msg = relevant[idx];
     const photoPath = photoPaths[idx];
-    if (!photoPath) continue;   // media wasn't an image or failed to download
+    if (!photoPath) continue;
 
     const rawAuthor = msg.author || msg._data?.author || '';
-    const phone = rawAuthor.replace('@c.us', '') || targetGroupId;
+    const phone = rawAuthor.replace('@c.us', '') || groupId;
     const senderName = msg._data?.notifyName || phone;
     const description = msg.body?.trim();
     const messageAt = new Date(msg.timestamp * 1000).toISOString();
@@ -323,16 +362,17 @@ async function runScan(days, msgsPerDay = 50, keywords = []) {
       senderName,
       photoPath,
       messageAt,
+      groupId,
     });
 
     if (itemId) saved++;
     else skipped++;
   }
 
-  console.log(`✅ Scan done — ${saved} new items saved, ${skipped} duplicates skipped.\n`);
+  console.log(`✅ [${groupName}] Scan done — ${saved} new, ${skipped} duplicates.\n`);
   return { fetched: messages.length, withinWindow: relevant.length, saved, skipped };
 }
 
 client.initialize();
 
-module.exports = { client, isReady: () => clientReady, startScan, getScanState };
+module.exports = { client, isReady: () => clientReady, startScan, getScanState, groupsConfig };

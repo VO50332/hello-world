@@ -6,7 +6,7 @@ const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 const path = require('path');
-const { saveItem } = require('../db');
+const { saveItem, deleteItemByMessageId, deleteLatestItemByPhone } = require('../db');
 
 // ── Configuration ────────────────────────────────────────────────────────────
 const TARGET_GROUP_NAME = process.env.WHATSAPP_GROUP_NAME || 'שוק מתנות';
@@ -94,15 +94,35 @@ client.on('message_create', async (message) => {
 
     const description = message.body?.trim();
 
-    // Skip messages without a photo — likely "looking for" requests, not offers
-    if (!message.hasMedia) {
-      console.log('  ⏭️  Skipping: no photo (probably a "looking for" message)');
+    // ── Unavailability markers ──────────────────────────────────────────────
+    // If the message contains 💾 or ❌ it signals an item is no longer available.
+    if (isUnavailableMessage(description)) {
+      if (message.hasQuotedMsg) {
+        // Reply to an item post → remove that specific item
+        try {
+          const quoted = await message.getQuotedMessage();
+          if (quoted) {
+            const removed = deleteItemByMessageId(quoted.id.id);
+            console.log(removed
+              ? `  🗑️  Removed item (reply marked unavailable): ${quoted.id.id}`
+              : `  ℹ️  Reply marked unavailable but item not found in DB`);
+          }
+        } catch (e) {
+          console.warn('  ⚠️  Could not fetch quoted message:', e.message);
+        }
+      } else {
+        // Standalone message → remove sender's most recent available item
+        const removed = deleteLatestItemByPhone(phone);
+        console.log(removed
+          ? `  🗑️  Removed latest item from ${senderName} (standalone unavailable marker)`
+          : `  ℹ️  Unavailable marker from ${senderName} but no matching item found`);
+      }
       return;
     }
 
-    // Skip messages marked as unavailable (💾 or ❌ in the text)
-    if (isUnavailableMessage(description)) {
-      console.log('  ⏭️  Skipping: marked as unavailable (💾/❌)');
+    // Skip messages without a photo — likely "looking for" requests, not offers
+    if (!message.hasMedia) {
+      console.log('  ⏭️  Skipping: no photo (probably a "looking for" message)');
       return;
     }
 
@@ -146,6 +166,24 @@ client.on('message_create', async (message) => {
     }
   } catch (err) {
     console.error('Error processing message:', err);
+  }
+});
+
+// ── Edit handler ─────────────────────────────────────────────────────────────
+// Fires when someone edits a message (e.g. seller adds 💾/❌ to their own post).
+client.on('message_edit', (message, newBody) => {
+  try {
+    if (message.from !== targetGroupId) return;
+    if (!isUnavailableMessage(newBody)) return;
+
+    const removed = deleteItemByMessageId(message.id.id);
+    const rawAuthor = message.author || message._data?.author || '';
+    const senderName = message._data?.notifyName || rawAuthor.replace('@c.us', '');
+    console.log(removed
+      ? `  🗑️  Removed item (message edited to mark unavailable by ${senderName})`
+      : `  ℹ️  Edited message marked unavailable but item not found in DB`);
+  } catch (err) {
+    console.error('Error processing message edit:', err);
   }
 });
 

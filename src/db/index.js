@@ -128,4 +128,33 @@ function deleteItem(id) {
   db.prepare('DELETE FROM items WHERE id = ?').run(id);
 }
 
-module.exports = { saveItem, getAvailableItems, getAllItems, markItemTaken, markItemAvailable, deleteItem };
+/**
+ * Delete an item by its WhatsApp message ID.
+ * Returns true if a row was deleted.
+ */
+function deleteItemByMessageId(messageId) {
+  const result = db.prepare('DELETE FROM items WHERE message_id = ?').run(messageId);
+  return result.changes > 0;
+}
+
+/**
+ * Delete the most recent available item from a given phone number.
+ * Returns true if a row was deleted.
+ */
+function deleteLatestItemByPhone(phone) {
+  const result = db.prepare(`
+    DELETE FROM items WHERE id = (
+      SELECT id FROM items
+      WHERE phone = ? AND is_taken = 0
+      ORDER BY COALESCE(message_at, created_at) DESC
+      LIMIT 1
+    )
+  `).run(phone);
+  return result.changes > 0;
+}
+
+module.exports = {
+  saveItem, getAvailableItems, getAllItems,
+  markItemTaken, markItemAvailable, deleteItem,
+  deleteItemByMessageId, deleteLatestItemByPhone,
+};

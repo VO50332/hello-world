@@ -52,7 +52,9 @@ app.get('/api/scan', async (req, res) => {
     const result = await scanHistory(days);
     res.json({ ok: true, days, ...result });
   } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+    const message = err?.message || String(err);
+    console.error('❌ Scan failed:', message);
+    res.status(500).json({ ok: false, error: message });
   }
 });
 

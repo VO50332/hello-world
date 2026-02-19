@@ -139,14 +139,29 @@ async function scanHistory(days) {
   if (!targetGroupId) {
     throw new Error('Group ID not set. Add WHATSAPP_GROUP_ID to your .env file and restart.');
   }
+  if (!targetGroupId.endsWith('@g.us')) {
+    throw new Error(`Invalid group ID "${targetGroupId}". It must end with @g.us (e.g. 120363XXXXXXXXXX@g.us). Check WHATSAPP_GROUP_ID in your .env file.`);
+  }
 
   const cutoffMs = Date.now() - days * 24 * 60 * 60 * 1000;
   // Fetch enough messages to cover the requested period (cap at 3000)
   const limit = Math.min(days * 150, 3000);
 
-  console.log(`\n🔍 Scanning last ${days} day(s) — fetching up to ${limit} messages...`);
+  console.log(`\n🔍 Scanning last ${days} day(s) — fetching up to ${limit} messages from ${targetGroupId}...`);
 
-  const chat = await client.getChatById(targetGroupId);
+  let chat;
+  try {
+    chat = await client.getChatById(targetGroupId);
+  } catch (err) {
+    const msg = err?.message || String(err);
+    throw new Error(`Could not load the group chat (ID: ${targetGroupId}). WhatsApp error: "${msg}". Make sure the group ID is correct and the bot is fully connected.`);
+  }
+
+  if (!chat) {
+    throw new Error(`Group not found (ID: ${targetGroupId}). The bot may not be a member of this group.`);
+  }
+
+  console.log(`   Found chat: "${chat.name}"`);
   const messages = await chat.fetchMessages({ limit });
 
   let saved = 0, skipped = 0;

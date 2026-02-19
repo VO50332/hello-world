@@ -151,10 +151,12 @@ function createCard(item) {
   const meta = document.createElement('div');
   meta.className = 'item-meta';
 
-  if (item.phone) {
+  // wa.me requires digits only (international format, no +/spaces/dashes)
+  const waPhone = (item.phone || '').replace(/\D/g, '');
+  if (waPhone.length >= 7) {
     const contact = document.createElement('div');
     contact.className = 'item-contact';
-    contact.innerHTML = `📞 <a href="https://wa.me/${item.phone}" target="_blank" rel="noopener">${
+    contact.innerHTML = `📞 <a href="https://wa.me/${waPhone}" target="_blank" rel="noopener">${
       item.sender_name || item.phone
     }</a>`;
     meta.appendChild(contact);

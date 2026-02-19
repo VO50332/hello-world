@@ -129,8 +129,11 @@ client.on('message_create', async (message) => {
 
     // Read sender info directly from the message data — no Puppeteer call needed
     const rawAuthor = message.author || message._data?.author || '';
-    const phone = rawAuthor.replace('@c.us', '') || message.from;
-    const senderName = message._data?.notifyName || phone;
+    // Strip the @c.us suffix to get a clean phone number.
+    // If rawAuthor is empty (shouldn't happen in groups) store null rather than
+    // falling back to the group ID, which is not a contactable phone number.
+    const phone = rawAuthor ? rawAuthor.replace('@c.us', '') : null;
+    const senderName = message._data?.notifyName || phone || groupName;
 
     console.log(`📨 [${groupName}] New message from ${senderName}`);
 
@@ -350,7 +353,7 @@ async function runScan(groupId, days, msgsPerDay = 100, keywords = []) {
     if (!photoPath) continue;
 
     const rawAuthor = msg.author || msg._data?.author || '';
-    const phone = rawAuthor.replace('@c.us', '') || groupId;
+    const phone = rawAuthor ? rawAuthor.replace('@c.us', '') : null;
     const senderName = msg._data?.notifyName || phone;
     const description = msg.body?.trim();
     const messageAt = new Date(msg.timestamp * 1000).toISOString();

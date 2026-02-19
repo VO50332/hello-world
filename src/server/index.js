@@ -46,13 +46,16 @@ app.delete('/api/items/:id', (req, res) => {
 // GET /api/scan/status  — check whether the scan is still running and see results.
 app.get('/api/scan', (req, res) => {
   const days = Math.max(1, Math.min(Number(req.query.days) || 7, 90));
+  // msgsPerDay controls how many messages are fetched per day (default 50, max 300)
+  const msgsPerDay = Math.max(10, Math.min(Number(req.query.msgsPerDay) || 50, 300));
   const { startScan } = require('../bot');
-  const outcome = startScan(days);
+  const outcome = startScan(days, msgsPerDay);
 
   if (outcome.error) return res.status(400).json({ ok: false, error: outcome.error });
   if (outcome.alreadyRunning) return res.json({ ok: true, status: 'already_running', message: 'A scan is already in progress. Check /api/scan/status for updates.' });
 
-  res.json({ ok: true, status: 'started', days, message: `Scanning last ${days} days in the background. Open /api/scan/status to check progress.` });
+  const limit = days * msgsPerDay;
+  res.json({ ok: true, status: 'started', days, msgsPerDay, limit, message: `Scanning last ${days} days (up to ${limit} messages) in the background. Open /api/scan/status to check progress.` });
 });
 
 app.get('/api/scan/status', (req, res) => {

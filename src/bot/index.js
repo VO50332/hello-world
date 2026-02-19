@@ -142,7 +142,7 @@ function getScanState() {
 
 // Starts a background scan and returns immediately.
 // Call getScanState() to poll for progress.
-function startScan(days) {
+function startScan(days, msgsPerDay) {
   if (scanState.running) return { alreadyRunning: true };
 
   if (!targetGroupId) {
@@ -155,7 +155,7 @@ function startScan(days) {
   scanState = { running: true, days, startedAt: new Date().toISOString(), result: null, error: null };
 
   // Run in background — do NOT await
-  runScan(days).then(result => {
+  runScan(days, msgsPerDay).then(result => {
     scanState = { running: false, days, startedAt: scanState.startedAt, result, error: null };
   }).catch(err => {
     const message = err?.message || String(err);
@@ -166,9 +166,9 @@ function startScan(days) {
   return { started: true };
 }
 
-async function runScan(days) {
+async function runScan(days, msgsPerDay = 50) {
   const cutoffMs = Date.now() - days * 24 * 60 * 60 * 1000;
-  const limit = Math.min(days * 150, 3000);
+  const limit = Math.min(days * msgsPerDay, 3000);
 
   console.log(`\n🔍 Scanning last ${days} day(s) — fetching up to ${limit} messages...`);
 
@@ -188,17 +188,18 @@ async function runScan(days) {
   const messages = await chat.fetchMessages({ limit });
   console.log(`   Fetched ${messages.length} messages, processing...`);
 
-  let saved = 0, skipped = 0;
+  // Filter to only messages within the time window that have content
+  const relevant = messages.filter(msg => msg.timestamp * 1000 >= cutoffMs);
+  console.log(`   ${relevant.length} messages within last ${days} day(s).`);
 
-  for (const msg of messages) {
-    if (msg.timestamp * 1000 < cutoffMs) continue;
+  // Download all images in parallel (5 at a time) instead of sequentially
+  const CONCURRENCY = 5;
+  const photoPaths = new Array(relevant.length).fill(null);
 
-    const rawAuthor = msg.author || msg._data?.author || '';
-    const phone = rawAuthor.replace('@c.us', '') || targetGroupId;
-    const senderName = msg._data?.notifyName || phone;
-
-    let photoPath = null;
-    if (msg.hasMedia) {
+  for (let i = 0; i < relevant.length; i += CONCURRENCY) {
+    const batch = relevant.slice(i, i + CONCURRENCY);
+    await Promise.all(batch.map(async (msg, batchIdx) => {
+      if (!msg.hasMedia) return;
       try {
         const media = await msg.downloadMedia();
         if (media && media.mimetype?.startsWith('image/')) {
@@ -206,12 +207,22 @@ async function runScan(days) {
           const filename = `${Date.now()}_${msg.id.id}.${ext}`;
           const filePath = path.join(UPLOADS_DIR, filename);
           fs.writeFileSync(filePath, Buffer.from(media.data, 'base64'));
-          photoPath = `/uploads/${filename}`;
+          photoPaths[i + batchIdx] = `/uploads/${filename}`;
         }
       } catch (_) { /* skip undownloadable media */ }
-    }
+    }));
+  }
 
+  let saved = 0, skipped = 0;
+
+  for (let idx = 0; idx < relevant.length; idx++) {
+    const msg = relevant[idx];
+    const rawAuthor = msg.author || msg._data?.author || '';
+    const phone = rawAuthor.replace('@c.us', '') || targetGroupId;
+    const senderName = msg._data?.notifyName || phone;
+    const photoPath = photoPaths[idx];
     const description = msg.body?.trim();
+
     if (!description && !photoPath) continue;
 
     const itemId = saveItem({
@@ -227,7 +238,7 @@ async function runScan(days) {
   }
 
   console.log(`✅ Scan done — ${saved} new items saved, ${skipped} duplicates skipped.\n`);
-  return { fetched: messages.length, saved, skipped };
+  return { fetched: messages.length, withinWindow: relevant.length, saved, skipped };
 }
 
 client.initialize();

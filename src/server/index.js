@@ -41,9 +41,26 @@ app.delete('/api/items/:id', (req, res) => {
   res.json({ ok: true });
 });
 
+// ── Scan endpoint ─────────────────────────────────────────────────────────────
+// GET /api/scan?days=7  — open this URL in your browser while the bot is running
+// to backfill the last N days of group messages into the database.
+app.get('/api/scan', async (req, res) => {
+  const days = Math.max(1, Math.min(Number(req.query.days) || 7, 90));
+  try {
+    // Lazy-require so this works even though server loads before bot
+    const { scanHistory } = require('../bot');
+    const result = await scanHistory(days);
+    res.json({ ok: true, days, ...result });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // ── Start server ─────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`🌐 Website running at http://localhost:${PORT}`);
+  console.log(`   Scan last 7 days : http://localhost:${PORT}/api/scan?days=7`);
+  console.log(`   Scan last 30 days: http://localhost:${PORT}/api/scan?days=30`);
 });
 
 module.exports = app;

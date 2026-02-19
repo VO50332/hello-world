@@ -132,6 +132,66 @@ client.on('disconnected', (reason) => {
   client.initialize();
 });
 
+// ── History scanner ───────────────────────────────────────────────────────────
+// Fetches the last `days` days of messages from the target group and saves
+// any new items to the database. Duplicate messages are automatically skipped.
+async function scanHistory(days) {
+  if (!targetGroupId) {
+    throw new Error('Group ID not set. Add WHATSAPP_GROUP_ID to your .env file and restart.');
+  }
+
+  const cutoffMs = Date.now() - days * 24 * 60 * 60 * 1000;
+  // Fetch enough messages to cover the requested period (cap at 3000)
+  const limit = Math.min(days * 150, 3000);
+
+  console.log(`\n🔍 Scanning last ${days} day(s) — fetching up to ${limit} messages...`);
+
+  const chat = await client.getChatById(targetGroupId);
+  const messages = await chat.fetchMessages({ limit });
+
+  let saved = 0, skipped = 0;
+
+  for (const msg of messages) {
+    // message.timestamp is in seconds
+    if (msg.timestamp * 1000 < cutoffMs) continue;
+
+    const rawAuthor = msg.author || msg._data?.author || '';
+    const phone = rawAuthor.replace('@c.us', '') || targetGroupId;
+    const senderName = msg._data?.notifyName || phone;
+
+    let photoPath = null;
+    if (msg.hasMedia) {
+      try {
+        const media = await msg.downloadMedia();
+        if (media && media.mimetype?.startsWith('image/')) {
+          const ext = media.mimetype.split('/')[1]?.split(';')[0] || 'jpg';
+          const filename = `${Date.now()}_${msg.id.id}.${ext}`;
+          const filePath = path.join(UPLOADS_DIR, filename);
+          fs.writeFileSync(filePath, Buffer.from(media.data, 'base64'));
+          photoPath = `/uploads/${filename}`;
+        }
+      } catch (_) { /* skip undownloadable media */ }
+    }
+
+    const description = msg.body?.trim();
+    if (!description && !photoPath) continue;
+
+    const itemId = saveItem({
+      messageId: msg.id.id,
+      description: description || '(ללא תיאור)',
+      phone,
+      senderName,
+      photoPath,
+    });
+
+    if (itemId) saved++;
+    else skipped++;
+  }
+
+  console.log(`✅ Scan done — ${saved} new items saved, ${skipped} duplicates skipped.\n`);
+  return { fetched: messages.length, saved, skipped };
+}
+
 client.initialize();
 
-module.exports = client;
+module.exports = { client, scanHistory };

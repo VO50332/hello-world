@@ -131,9 +131,6 @@ app.get('/api/scan/status', (req, res) => {
 // ── Start server ─────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`🌐 Website running at http://localhost:${PORT}`);
-  console.log(`   Start scan (7 days) : http://localhost:${PORT}/api/scan?days=7`);
-  console.log(`   Start scan (30 days): http://localhost:${PORT}/api/scan?days=30`);
-  console.log(`   Check scan progress : http://localhost:${PORT}/api/scan/status`);
 });
 
 module.exports = app;

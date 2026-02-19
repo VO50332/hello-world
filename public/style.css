@@ -34,6 +34,28 @@ header .subtitle {
   margin-top: 0.2rem;
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+#searchInput {
+  padding: 0.45rem 0.8rem;
+  border-radius: 20px;
+  border: none;
+  font-size: 0.95rem;
+  outline: none;
+  width: 200px;
+  background: rgba(255,255,255,0.2);
+  color: white;
+  direction: rtl;
+}
+
+#searchInput::placeholder { color: rgba(255,255,255,0.75); }
+#searchInput:focus { background: rgba(255,255,255,0.35); }
+
 .toggle-label {
   display: flex;
   align-items: center;

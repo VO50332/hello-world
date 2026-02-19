@@ -5,10 +5,17 @@ const grid = document.getElementById('items-grid');
 const loading = document.getElementById('loading');
 const empty = document.getElementById('empty');
 const showTakenCheckbox = document.getElementById('showTaken');
+const searchInput = document.getElementById('searchInput');
 
-// Load items when the page opens and when the "show taken" checkbox changes
+// All items fetched from the server — filtering happens client-side
+let allItems = [];
+
+// Load from server when page opens or "show taken" changes
 document.addEventListener('DOMContentLoaded', loadItems);
 showTakenCheckbox.addEventListener('change', loadItems);
+
+// Filter locally as the user types — no extra network request
+searchInput.addEventListener('input', renderItems);
 
 async function loadItems() {
   loading.style.display = 'block';
@@ -18,19 +25,28 @@ async function loadItems() {
   try {
     const showAll = showTakenCheckbox.checked;
     const res = await fetch(`/api/items${showAll ? '?all=true' : ''}`);
-    const items = await res.json();
-
+    allItems = await res.json();
     loading.style.display = 'none';
-
-    if (items.length === 0) {
-      empty.style.display = 'block';
-      return;
-    }
-
-    items.forEach(item => grid.appendChild(createCard(item)));
+    renderItems();
   } catch (err) {
     loading.textContent = '⚠️ שגיאה בטעינת הפריטים. נסה לרענן את הדף.';
     console.error(err);
+  }
+}
+
+function renderItems() {
+  grid.innerHTML = '';
+  const query = searchInput.value.trim().toLowerCase();
+
+  const visible = query
+    ? allItems.filter(item => item.description?.toLowerCase().includes(query))
+    : allItems;
+
+  if (visible.length === 0) {
+    empty.style.display = 'block';
+  } else {
+    empty.style.display = 'none';
+    visible.forEach(item => grid.appendChild(createCard(item)));
   }
 }
 

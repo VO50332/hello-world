@@ -26,6 +26,7 @@ const client = new Client({
   puppeteer: {
     // Run Chrome without a visible window (headless mode)
     headless: true,
+    protocolTimeout: 60000, // 60s — prevents timeout on slow machines
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -34,6 +35,10 @@ const client = new Client({
     ],
   },
 });
+
+// The group's unique WhatsApp ID (e.g. "120363XXXX@g.us").
+// Resolved once on 'ready' so we never call getChat() per message.
+let targetGroupId = null;
 
 // Show QR code in the terminal so you can scan it with your phone
 client.on('qr', (qr) => {
@@ -50,19 +55,24 @@ client.on('auth_failure', (msg) => {
   console.error('❌ Authentication failed:', msg);
 });
 
-client.on('ready', () => {
-  console.log(`✅ Bot is running! Monitoring group: "${TARGET_GROUP_NAME}"`);
+client.on('ready', async () => {
+  // Look up the target group once so we can filter by ID (not name) later.
+  // Filtering by message.from is instant and requires no browser call.
+  const chats = await client.getChats();
+  const group = chats.find(c => c.name === TARGET_GROUP_NAME);
+  if (group) {
+    targetGroupId = group.id._serialized;
+    console.log(`✅ Bot is running! Monitoring group: "${TARGET_GROUP_NAME}"`);
+  } else {
+    console.warn(`⚠️  Group "${TARGET_GROUP_NAME}" not found. Check WHATSAPP_GROUP_NAME in your .env file.`);
+  }
 });
 
 // ── Main message handler ─────────────────────────────────────────────────────
 client.on('message_create', async (message) => {
   try {
-    // Only handle messages from groups (not private chats)
-    if (!message.from.endsWith('@g.us')) return;
-
-    // Get the group's name
-    const chat = await message.getChat();
-    if (chat.name !== TARGET_GROUP_NAME) return;
+    // Only handle messages from the target group (fast ID comparison, no browser call)
+    if (!targetGroupId || message.from !== targetGroupId) return;
 
     console.log(`📨 New message in "${TARGET_GROUP_NAME}" from ${message._data.notifyName || message.from}`);
 

@@ -17,8 +17,10 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 showTakenCheckbox.addEventListener('change', loadItems);
 
-// Filter locally as the user types — no extra network request
+// Filter locally as the user types — no extra network request.
+// Also listen to 'search' so the browser's × clear button works correctly.
 searchInput.addEventListener('input', renderItems);
+searchInput.addEventListener('search', renderItems);
 
 // ── Groups ─────────────────────────────────────────────────────────────────
 

@@ -2,15 +2,19 @@
 // Uses whatsapp-web.js which controls WhatsApp Web in a hidden browser.
 // On first run it will show a QR code — scan it with your phone to log in.
 
-const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
+const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 const path = require('path');
 const { saveItem } = require('../db');
 
 // ── Configuration ────────────────────────────────────────────────────────────
-// Set the exact name of your WhatsApp group here (copy-paste from WhatsApp).
 const TARGET_GROUP_NAME = process.env.WHATSAPP_GROUP_NAME || 'שוק מתנות';
+
+// WHATSAPP_GROUP_ID lets you skip the slow group-name lookup entirely.
+// The bot will print the ID of every group that sends a message — copy it
+// from the log and add it to your .env file as WHATSAPP_GROUP_ID=<id>.
+let targetGroupId = process.env.WHATSAPP_GROUP_ID || null;
 
 // Where to save photos sent in the group
 const UPLOADS_DIR = path.join(__dirname, '../../public/uploads');
@@ -19,14 +23,11 @@ if (!fs.existsSync(UPLOADS_DIR)) {
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Create the WhatsApp client.
-// LocalAuth saves your session so you only need to scan the QR code once.
 const client = new Client({
   authStrategy: new LocalAuth({ dataPath: path.join(__dirname, '../../.wwebjs_auth') }),
   puppeteer: {
-    // Run Chrome without a visible window (headless mode)
     headless: true,
-    protocolTimeout: 60000, // 60s — prevents timeout on slow machines
+    protocolTimeout: 120000, // 2 min — for photo downloads on slow connections
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -36,11 +37,6 @@ const client = new Client({
   },
 });
 
-// The group's unique WhatsApp ID (e.g. "120363XXXX@g.us").
-// Resolved once on 'ready' so we never call getChat() per message.
-let targetGroupId = null;
-
-// Show QR code in the terminal so you can scan it with your phone
 client.on('qr', (qr) => {
   console.log('\n📱 Scan this QR code with WhatsApp on your phone:\n');
   qrcode.generate(qr, { small: true });
@@ -55,39 +51,45 @@ client.on('auth_failure', (msg) => {
   console.error('❌ Authentication failed:', msg);
 });
 
-client.on('ready', async () => {
-  // Look up the target group once so we can filter by ID (not name) later.
-  // Filtering by message.from is instant and requires no browser call.
-  const chats = await client.getChats();
-  const group = chats.find(c => c.name === TARGET_GROUP_NAME);
-  if (group) {
-    targetGroupId = group.id._serialized;
-    console.log(`✅ Bot is running! Monitoring group: "${TARGET_GROUP_NAME}"`);
+client.on('ready', () => {
+  if (targetGroupId) {
+    console.log(`✅ Bot is running! Monitoring group: "${TARGET_GROUP_NAME}" (${targetGroupId})`);
   } else {
-    console.warn(`⚠️  Group "${TARGET_GROUP_NAME}" not found. Check WHATSAPP_GROUP_NAME in your .env file.`);
+    console.log(`✅ Bot is ready. Waiting to identify group "${TARGET_GROUP_NAME}"...`);
+    console.log('   When any group message arrives, its ID will be printed here.');
+    console.log('   Copy the correct ID into your .env as: WHATSAPP_GROUP_ID=<id>');
   }
 });
 
 // ── Main message handler ─────────────────────────────────────────────────────
 client.on('message_create', async (message) => {
   try {
-    // Only handle messages from the target group (fast ID comparison, no browser call)
-    if (!targetGroupId || message.from !== targetGroupId) return;
+    // Only handle group messages
+    if (!message.from.endsWith('@g.us')) return;
 
-    console.log(`📨 New message in "${TARGET_GROUP_NAME}" from ${message._data.notifyName || message.from}`);
+    // If WHATSAPP_GROUP_ID is not set yet, log every group's ID to help the user find theirs
+    if (!targetGroupId) {
+      console.log(`📋 Group message received — Group ID: ${message.from}`);
+      console.log(`   If this is "${TARGET_GROUP_NAME}", add to your .env:`);
+      console.log(`   WHATSAPP_GROUP_ID=${message.from}`);
+      return;
+    }
 
-    // Get the sender's phone number (strip the WhatsApp suffix @c.us)
-    const contact = await message.getContact();
-    const phone = contact.number || message.author?.replace('@c.us', '');
-    const senderName = contact.pushname || contact.name || phone;
+    if (message.from !== targetGroupId) return;
 
-    // Handle photo/video attachments
+    // Read sender info directly from the message data — no Puppeteer call needed
+    const rawAuthor = message.author || message._data?.author || '';
+    const phone = rawAuthor.replace('@c.us', '') || message.from;
+    const senderName = message._data?.notifyName || phone;
+
+    console.log(`📨 New message in "${TARGET_GROUP_NAME}" from ${senderName}`);
+
+    // Handle photo attachments
     let photoPath = null;
     if (message.hasMedia) {
       try {
         const media = await message.downloadMedia();
         if (media && media.mimetype?.startsWith('image/')) {
-          // Save the image with a unique filename
           const ext = media.mimetype.split('/')[1]?.split(';')[0] || 'jpg';
           const filename = `${Date.now()}_${message.id.id}.${ext}`;
           const filePath = path.join(UPLOADS_DIR, filename);
@@ -100,16 +102,13 @@ client.on('message_create', async (message) => {
       }
     }
 
-    // The message text (caption if it's a photo, or the plain text)
     const description = message.body?.trim();
 
-    // Skip empty messages with no photo
     if (!description && !photoPath) {
       console.log('  ⏭️  Skipping: no text and no photo');
       return;
     }
 
-    // Save to the database
     const itemId = saveItem({
       messageId: message.id.id,
       description: description || '(ללא תיאור)',
@@ -130,11 +129,9 @@ client.on('message_create', async (message) => {
 
 client.on('disconnected', (reason) => {
   console.log('Bot disconnected:', reason);
-  // Reconnect automatically
   client.initialize();
 });
 
-// Start the bot
 client.initialize();
 
 module.exports = client;

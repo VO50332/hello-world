@@ -5,7 +5,7 @@ const express = require('express');
 const path = require('path');
 const {
   getAvailableItems, getAllItems, getGroupIds,
-  markItemTaken, markItemAvailable, deleteItem,
+  markItemTaken, markItemAvailable, deleteItem, deleteAllItems,
   getConfiguredGroups, addConfiguredGroup, removeConfiguredGroup,
 } = require('../db');
 
@@ -73,6 +73,12 @@ app.patch('/api/items/:id/available', (req, res) => {
 // DELETE /api/items/:id — remove an item
 app.delete('/api/items/:id', (req, res) => {
   deleteItem(Number(req.params.id));
+  res.json({ ok: true });
+});
+
+// DELETE /api/items — remove ALL items
+app.delete('/api/items', (req, res) => {
+  deleteAllItems();
   res.json({ ok: true });
 });
 

@@ -238,6 +238,12 @@ document.addEventListener('keydown', (e) => {
 // Refresh the list every 30 seconds automatically
 setInterval(loadItems, 30_000);
 
+async function clearAllItems() {
+  if (!confirm('למחוק את כל הפריטים? פעולה זו אינה ניתנת לביטול.')) return;
+  await fetch('/api/items', { method: 'DELETE' });
+  loadItems();
+}
+
 // ── Groups management panel ───────────────────────────────────────────────────
 
 let availableChats = [];   // all WhatsApp groups from /api/chats

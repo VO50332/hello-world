@@ -168,11 +168,14 @@ function markItemAvailable(id) {
   `).run(id);
 }
 
-/**
- * Delete an item by ID.
- */
+/** Delete an item by ID. */
 function deleteItem(id) {
   db.prepare('DELETE FROM items WHERE id = ?').run(id);
+}
+
+/** Delete every item in the database. */
+function deleteAllItems() {
+  db.prepare('DELETE FROM items').run();
 }
 
 /**
@@ -217,7 +220,7 @@ function removeConfiguredGroup(id) {
 
 module.exports = {
   saveItem, getAvailableItems, getAllItems, getGroupIds,
-  markItemTaken, markItemAvailable, deleteItem,
+  markItemTaken, markItemAvailable, deleteItem, deleteAllItems,
   deleteItemByMessageId, deleteLatestItemByPhone,
   getConfiguredGroups, addConfiguredGroup, removeConfiguredGroup,
 };

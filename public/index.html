@@ -27,6 +27,25 @@
     </div>
   </header>
 
+  <!-- Scan control panel -->
+  <div id="scan-panel">
+    <details>
+      <summary>🔍 סריקת הודעות ישנות מהקבוצה</summary>
+      <div class="scan-form">
+        <div class="scan-row">
+          <label>מספר ימים לסרוק
+            <input type="number" id="scanDays" value="30" min="1" max="180" />
+          </label>
+          <label>מילות מפתח (מופרדות בפסיקות)
+            <input type="text" id="scanKeywords" placeholder='לדוגמה: כיסא,ספה,מיטה' dir="rtl" />
+          </label>
+          <button id="scanBtn" class="btn btn-scan" onclick="triggerScan()">התחל סריקה</button>
+        </div>
+        <div id="scan-status" class="scan-status" style="display:none"></div>
+      </div>
+    </details>
+  </div>
+
   <main>
     <div id="loading" class="loading">טוען פריטים...</div>
     <div id="empty" class="empty" style="display:none">

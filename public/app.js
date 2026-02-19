@@ -173,3 +173,76 @@ document.addEventListener('keydown', (e) => {
 
 // Refresh the list every 30 seconds automatically
 setInterval(loadItems, 30_000);
+
+// ── Scan panel ────────────────────────────────────────────────────────────────
+
+let scanPoller = null;
+
+async function triggerScan() {
+  const days = document.getElementById('scanDays').value || 30;
+  const rawKeywords = document.getElementById('scanKeywords').value.trim();
+  const statusEl = document.getElementById('scan-status');
+  const btn = document.getElementById('scanBtn');
+
+  let url = `/api/scan?days=${encodeURIComponent(days)}&msgsPerDay=150`;
+  if (rawKeywords) url += `&keywords=${encodeURIComponent(rawKeywords)}`;
+
+  btn.disabled = true;
+  statusEl.style.display = 'block';
+  statusEl.className = 'scan-status running';
+  statusEl.textContent = '⏳ מתחיל סריקה...';
+
+  try {
+    const res = await fetch(url);
+    const data = await res.json();
+    if (!data.ok) {
+      statusEl.className = 'scan-status error';
+      statusEl.textContent = `❌ שגיאה: ${data.error}`;
+      btn.disabled = false;
+      return;
+    }
+    if (data.status === 'already_running') {
+      statusEl.textContent = '⏳ סריקה כבר רצה ברקע...';
+    } else {
+      const kw = rawKeywords ? ` | מילות מפתח: ${rawKeywords}` : '';
+      statusEl.textContent = `⏳ סורק ${days} ימים (עד ${data.limit} הודעות)${kw}...`;
+    }
+    pollScanStatus();
+  } catch (err) {
+    statusEl.className = 'scan-status error';
+    statusEl.textContent = `❌ שגיאת רשת: ${err.message}`;
+    btn.disabled = false;
+  }
+}
+
+function pollScanStatus() {
+  clearInterval(scanPoller);
+  scanPoller = setInterval(async () => {
+    try {
+      const res = await fetch('/api/scan/status');
+      const data = await res.json();
+      const statusEl = document.getElementById('scan-status');
+      const btn = document.getElementById('scanBtn');
+
+      if (data.status === 'running') {
+        statusEl.className = 'scan-status running';
+        statusEl.textContent = '⏳ סריקה פעילה — נא המתן...';
+        return;
+      }
+
+      clearInterval(scanPoller);
+      btn.disabled = false;
+
+      if (data.status === 'done') {
+        const r = data.result;
+        statusEl.className = 'scan-status done';
+        statusEl.textContent =
+          `✅ סריקה הסתיימה — ${r.saved} פריטים נשמרו, ${r.skipped} כפילויות, ${r.withinWindow} הודעות רלוונטיות מתוך ${r.fetched} שנמשכו`;
+        loadItems(); // refresh the grid
+      } else if (data.status === 'error') {
+        statusEl.className = 'scan-status error';
+        statusEl.textContent = `❌ הסריקה נכשלה: ${data.error}`;
+      }
+    } catch (_) { /* network hiccup — try again next tick */ }
+  }, 3000);
+}

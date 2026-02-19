@@ -16,6 +16,14 @@ const TARGET_GROUP_NAME = process.env.WHATSAPP_GROUP_NAME || 'שוק מתנות'
 // from the log and add it to your .env file as WHATSAPP_GROUP_ID=<id>.
 let targetGroupId = process.env.WHATSAPP_GROUP_ID || null;
 
+// SCAN_KEYWORDS: comma-separated words (Hebrew or any language).
+// When set, the bot will only save messages whose description contains
+// at least one of these keywords — both in live mode and when scanning history.
+// Leave empty to save all posts. Example: SCAN_KEYWORDS=כיסא,ספה,מיטה
+const ENV_KEYWORDS = process.env.SCAN_KEYWORDS
+  ? process.env.SCAN_KEYWORDS.split(',').map(k => k.trim().toLowerCase()).filter(Boolean)
+  : [];
+
 // Where to save photos sent in the group
 const UPLOADS_DIR = path.join(__dirname, '../../public/uploads');
 if (!fs.existsSync(UPLOADS_DIR)) {
@@ -67,6 +75,14 @@ client.on('ready', () => {
 // Returns true if the message text contains markers meaning "no longer available"
 function isUnavailableMessage(text) {
   return text ? /💾|❌/.test(text) : false;
+}
+
+// Returns true when the text matches at least one keyword.
+// If no keywords are configured, every message matches (no filter applied).
+function matchesKeywords(text, keywords) {
+  if (!keywords || keywords.length === 0) return true;
+  const lower = (text || '').toLowerCase();
+  return keywords.some(k => lower.includes(k));
 }
 
 // ── Main message handler ─────────────────────────────────────────────────────
@@ -123,6 +139,12 @@ client.on('message_create', async (message) => {
     // Skip messages without a photo — likely "looking for" requests, not offers
     if (!message.hasMedia) {
       console.log('  ⏭️  Skipping: no photo (probably a "looking for" message)');
+      return;
+    }
+
+    // Skip messages that don't match the configured keywords (if any)
+    if (!matchesKeywords(description, ENV_KEYWORDS)) {
+      console.log(`  ⏭️  Skipping: no keyword match (keywords: ${ENV_KEYWORDS.join(', ')})`);
       return;
     }
 
@@ -202,7 +224,7 @@ function getScanState() {
 
 // Starts a background scan and returns immediately.
 // Call getScanState() to poll for progress.
-function startScan(days, msgsPerDay) {
+function startScan(days, msgsPerDay, keywords = []) {
   if (scanState.running) return { alreadyRunning: true };
 
   if (!targetGroupId) {
@@ -212,25 +234,26 @@ function startScan(days, msgsPerDay) {
     return { error: `Invalid group ID "${targetGroupId}". It must end with @g.us. Check WHATSAPP_GROUP_ID in your .env.` };
   }
 
-  scanState = { running: true, days, startedAt: new Date().toISOString(), result: null, error: null };
+  scanState = { running: true, days, keywords, startedAt: new Date().toISOString(), result: null, error: null };
 
   // Run in background — do NOT await
-  runScan(days, msgsPerDay).then(result => {
-    scanState = { running: false, days, startedAt: scanState.startedAt, result, error: null };
+  runScan(days, msgsPerDay, keywords).then(result => {
+    scanState = { running: false, days, keywords, startedAt: scanState.startedAt, result, error: null };
   }).catch(err => {
     const message = err?.message || String(err);
     console.error('❌ Scan failed:', message);
-    scanState = { running: false, days, startedAt: scanState.startedAt, result: null, error: message };
+    scanState = { running: false, days, keywords, startedAt: scanState.startedAt, result: null, error: message };
   });
 
   return { started: true };
 }
 
-async function runScan(days, msgsPerDay = 50) {
+async function runScan(days, msgsPerDay = 50, keywords = []) {
   const cutoffMs = Date.now() - days * 24 * 60 * 60 * 1000;
-  const limit = Math.min(days * msgsPerDay, 3000);
+  const limit = Math.min(days * msgsPerDay, 5000);
 
-  console.log(`\n🔍 Scanning last ${days} day(s) — fetching up to ${limit} messages...`);
+  const keywordLabel = keywords.length ? ` | keywords: ${keywords.join(', ')}` : '';
+  console.log(`\n🔍 Scanning last ${days} day(s) — up to ${limit} messages${keywordLabel}...`);
 
   let chat;
   try {
@@ -248,11 +271,14 @@ async function runScan(days, msgsPerDay = 50) {
   const messages = await chat.fetchMessages({ limit });
   console.log(`   Fetched ${messages.length} messages, processing...`);
 
-  // Keep only messages within the time window that have a photo and aren't marked unavailable
+  // Keep only messages within the time window that have a photo, aren't marked
+  // unavailable, and (if keywords are set) contain at least one keyword.
+  // Keyword filtering here avoids downloading images for irrelevant posts.
   const relevant = messages.filter(msg => {
     if (msg.timestamp * 1000 < cutoffMs) return false;
     if (!msg.hasMedia) return false;                          // no photo = "looking for" post
     if (isUnavailableMessage(msg.body)) return false;        // 💾/❌ = already taken
+    if (!matchesKeywords(msg.body, keywords)) return false;  // keyword filter
     return true;
   });
   console.log(`   ${relevant.length} messages with photos within last ${days} day(s).`);

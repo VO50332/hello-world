@@ -72,6 +72,85 @@ header .subtitle {
   accent-color: white;
 }
 
+/* ── Scan panel ───────────────────────────────────────────────── */
+#scan-panel {
+  background: #fff;
+  border-bottom: 1px solid #dde3ec;
+  padding: 0 2rem;
+}
+
+#scan-panel details > summary {
+  padding: 0.75rem 0;
+  cursor: pointer;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #128c7e;
+  list-style: none;
+  user-select: none;
+}
+#scan-panel details > summary::-webkit-details-marker { display: none; }
+
+.scan-form {
+  padding: 1rem 0 1.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.scan-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: flex-end;
+}
+
+.scan-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  color: #555;
+}
+
+.scan-row input[type="number"] {
+  width: 90px;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  font-size: 0.95rem;
+}
+
+.scan-row input[type="text"] {
+  width: 280px;
+  padding: 0.4rem 0.7rem;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  font-size: 0.95rem;
+}
+
+.btn-scan {
+  background: #25d366;
+  color: white;
+  border: none;
+  padding: 0.5rem 1.2rem;
+  border-radius: 6px;
+  font-size: 0.95rem;
+  cursor: pointer;
+  font-weight: 600;
+  align-self: flex-end;
+}
+.btn-scan:disabled { opacity: 0.5; cursor: default; }
+.btn-scan:hover:not(:disabled) { background: #1ebe5a; }
+
+.scan-status {
+  font-size: 0.9rem;
+  padding: 0.5rem 0.8rem;
+  border-radius: 6px;
+}
+.scan-status.running { background: #fff8e1; color: #7a5800; }
+.scan-status.done    { background: #e8f5e9; color: #2e7d32; }
+.scan-status.error   { background: #ffebee; color: #b71c1c; }
+
 /* ── Main content ─────────────────────────────────────────────── */
 main {
   max-width: 1200px;

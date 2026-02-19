@@ -61,17 +61,23 @@ app.get('/api/chats', async (req, res) => {
   }
 });
 app.get('/api/scan', (req, res) => {
-  const days = Math.max(1, Math.min(Number(req.query.days) || 7, 90));
-  // msgsPerDay controls how many messages are fetched per day (default 50, max 300)
-  const msgsPerDay = Math.max(10, Math.min(Number(req.query.msgsPerDay) || 50, 300));
+  const days = Math.max(1, Math.min(Number(req.query.days) || 7, 180));
+  // msgsPerDay: how many messages to fetch per day (default 100, max 500)
+  const msgsPerDay = Math.max(10, Math.min(Number(req.query.msgsPerDay) || 100, 500));
+  // keywords: comma-separated filter — only posts containing these words will be saved
+  const keywords = req.query.keywords
+    ? req.query.keywords.split(',').map(k => k.trim().toLowerCase()).filter(Boolean)
+    : [];
+
   const { startScan } = require('../bot');
-  const outcome = startScan(days, msgsPerDay);
+  const outcome = startScan(days, msgsPerDay, keywords);
 
   if (outcome.error) return res.status(400).json({ ok: false, error: outcome.error });
   if (outcome.alreadyRunning) return res.json({ ok: true, status: 'already_running', message: 'A scan is already in progress. Check /api/scan/status for updates.' });
 
   const limit = days * msgsPerDay;
-  res.json({ ok: true, status: 'started', days, msgsPerDay, limit, message: `Scanning last ${days} days (up to ${limit} messages) in the background. Open /api/scan/status to check progress.` });
+  res.json({ ok: true, status: 'started', days, msgsPerDay, keywords, limit,
+    message: `Scanning last ${days} days (up to ${limit} messages)${keywords.length ? ` | keywords: ${keywords.join(', ')}` : ''} in the background.` });
 });
 
 app.get('/api/scan/status', (req, res) => {

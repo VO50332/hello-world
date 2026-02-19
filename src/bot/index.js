@@ -78,12 +78,16 @@ function hasUnavailableReaction(msg) {
   return reactions.some(r => r.aggregateEmoji === '💾' || r.aggregateEmoji === '❌');
 }
 
-// Returns true when the text matches at least one keyword.
+// Returns true when the text matches keywords.
+// mode='or'  → at least one keyword must appear (default)
+// mode='and' → every keyword must appear
 // If no keywords are configured, every message matches (no filter applied).
-function matchesKeywords(text, keywords) {
+function matchesKeywords(text, keywords, mode = 'or') {
   if (!keywords || keywords.length === 0) return true;
   const lower = (text || '').toLowerCase();
-  return keywords.some(k => lower.includes(k));
+  return mode === 'and'
+    ? keywords.every(k => lower.includes(k))
+    : keywords.some(k => lower.includes(k));
 }
 
 // ── History scanner ───────────────────────────────────────────────────────────
@@ -98,7 +102,7 @@ function getScanState() {
 
 // Starts a background scan and returns immediately.
 // groupId: which group to scan. If omitted, scans all configured groups sequentially.
-function startScan(days, msgsPerDay, keywords = [], groupId = null) {
+function startScan(days, msgsPerDay, keywords = [], keywordMode = 'or', groupId = null) {
   if (scanState.running) return { alreadyRunning: true };
 
   // Load groups fresh from DB so newly added groups are included
@@ -116,25 +120,25 @@ function startScan(days, msgsPerDay, keywords = [], groupId = null) {
     }
   }
 
-  scanState = { running: true, days, keywords, groupId, startedAt: new Date().toISOString(), result: null, error: null };
+  scanState = { running: true, days, keywords, keywordMode, groupId, startedAt: new Date().toISOString(), result: null, error: null };
 
   // Run in background — do NOT await
-  runScanAll(idsToScan, configMap, days, msgsPerDay, keywords).then(result => {
-    scanState = { running: false, days, keywords, groupId, startedAt: scanState.startedAt, result, error: null };
+  runScanAll(idsToScan, configMap, days, msgsPerDay, keywords, keywordMode).then(result => {
+    scanState = { running: false, days, keywords, keywordMode, groupId, startedAt: scanState.startedAt, result, error: null };
   }).catch(err => {
     const message = err?.message || String(err);
     console.error('❌ Scan failed:', message);
-    scanState = { running: false, days, keywords, groupId, startedAt: scanState.startedAt, result: null, error: message };
+    scanState = { running: false, days, keywords, keywordMode, groupId, startedAt: scanState.startedAt, result: null, error: message };
   });
 
   return { started: true };
 }
 
 // Scan multiple groups sequentially and aggregate results.
-async function runScanAll(groupIds, configMap, days, msgsPerDay, keywords) {
+async function runScanAll(groupIds, configMap, days, msgsPerDay, keywords, keywordMode = 'or') {
   let totalFetched = 0, totalWithinWindow = 0, totalSaved = 0, totalSkipped = 0;
   for (const id of groupIds) {
-    const r = await runScan(id, configMap.get(id) || id, days, msgsPerDay, keywords);
+    const r = await runScan(id, configMap.get(id) || id, days, msgsPerDay, keywords, keywordMode);
     totalFetched += r.fetched;
     totalWithinWindow += r.withinWindow;
     totalSaved += r.saved;
@@ -143,11 +147,11 @@ async function runScanAll(groupIds, configMap, days, msgsPerDay, keywords) {
   return { fetched: totalFetched, withinWindow: totalWithinWindow, saved: totalSaved, skipped: totalSkipped };
 }
 
-async function runScan(groupId, groupName, days, msgsPerDay = 100, keywords = []) {
+async function runScan(groupId, groupName, days, msgsPerDay = 100, keywords = [], keywordMode = 'or') {
   const cutoffMs = Date.now() - days * 24 * 60 * 60 * 1000;
   const limit = days * msgsPerDay;
 
-  const keywordLabel = keywords.length ? ` | keywords: ${keywords.join(', ')}` : '';
+  const keywordLabel = keywords.length ? ` | keywords (${keywordMode.toUpperCase()}): ${keywords.join(', ')}` : '';
   console.log(`\n🔍 [${groupName}] Scanning last ${days} day(s) — up to ${limit} messages${keywordLabel}...`);
 
   let chat;
@@ -167,7 +171,7 @@ async function runScan(groupId, groupName, days, msgsPerDay = 100, keywords = []
     if (!msg.hasMedia) return false;
     if (isUnavailableMessage(msg.body)) return false;
     if (hasUnavailableReaction(msg)) return false;
-    if (!matchesKeywords(msg.body, keywords)) return false;
+    if (!matchesKeywords(msg.body, keywords, keywordMode)) return false;
     return true;
   });
   console.log(`   ${relevant.length} relevant messages with photos.`);

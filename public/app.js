@@ -378,8 +378,9 @@ async function triggerScan() {
   const statusEl = document.getElementById('scan-status');
   const btn = document.getElementById('scanBtn');
 
+  const keywordMode = document.getElementById('keywordMode')?.value || 'or';
   let url = `/api/scan?days=${encodeURIComponent(days)}&msgsPerDay=500`;
-  if (rawKeywords) url += `&keywords=${encodeURIComponent(rawKeywords)}`;
+  if (rawKeywords) url += `&keywords=${encodeURIComponent(rawKeywords)}&keywordMode=${keywordMode}`;
   if (groupId) url += `&groupId=${encodeURIComponent(groupId)}`;
 
   btn.disabled = true;
@@ -399,7 +400,8 @@ async function triggerScan() {
     if (data.status === 'already_running') {
       statusEl.textContent = '⏳ סריקה כבר רצה ברקע...';
     } else {
-      const kw = rawKeywords ? ` | מילות מפתח: ${rawKeywords}` : '';
+      const kwMode = rawKeywords && keywordMode === 'and' ? ' (AND)' : rawKeywords ? ' (OR)' : '';
+      const kw = rawKeywords ? ` | מילות מפתח${kwMode}: ${rawKeywords}` : '';
       statusEl.textContent = `⏳ סורק ${days} ימים (עד ${data.limit} הודעות)${kw}...`;
     }
     pollScanStatus();

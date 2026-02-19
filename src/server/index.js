@@ -108,17 +108,19 @@ app.get('/api/scan', (req, res) => {
   const keywords = req.query.keywords
     ? req.query.keywords.split(',').map(k => k.trim().toLowerCase()).filter(Boolean)
     : [];
+  const keywordMode = req.query.keywordMode === 'and' ? 'and' : 'or';
   const groupId = req.query.groupId || null;
 
   const { startScan } = require('../bot');
-  const outcome = startScan(days, msgsPerDay, keywords, groupId);
+  const outcome = startScan(days, msgsPerDay, keywords, keywordMode, groupId);
 
   if (outcome.error) return res.status(400).json({ ok: false, error: outcome.error });
   if (outcome.alreadyRunning) return res.json({ ok: true, status: 'already_running', message: 'Scan already running. Check /api/scan/status.' });
 
   const limit = days * msgsPerDay;
-  res.json({ ok: true, status: 'started', days, msgsPerDay, keywords, groupId, limit,
-    message: `Scan started for last ${days} days${groupId ? ` in ${groupId}` : ' (all groups)'}${keywords.length ? ` | keywords: ${keywords.join(', ')}` : ''}.` });
+  const kwLabel = keywords.length ? ` | keywords (${keywordMode.toUpperCase()}): ${keywords.join(', ')}` : '';
+  res.json({ ok: true, status: 'started', days, msgsPerDay, keywords, keywordMode, groupId, limit,
+    message: `Scan started for last ${days} days${groupId ? ` in ${groupId}` : ' (all groups)'}${kwLabel}.` });
 });
 
 app.get('/api/scan/status', (req, res) => {

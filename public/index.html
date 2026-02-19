@@ -73,7 +73,14 @@
             <select id="scanGroupSelect"></select>
           </label>
           <label>מילות מפתח (מופרדות בפסיקות)
-            <input type="text" id="scanKeywords" placeholder='לדוגמה: כיסא,ספה,מיטה' dir="rtl" />
+            <input type="text" id="scanKeywords" placeholder='לדוגמה: כיסא,ספה,מיטה' dir="rtl"
+              oninput="document.getElementById('keywordModeLabel').style.display=this.value.includes(',')?'':'none'" />
+          </label>
+          <label id="keywordModeLabel" style="display:none">חיפוש
+            <select id="keywordMode">
+              <option value="or">OR — לפחות מילה אחת</option>
+              <option value="and">AND — כל המילים</option>
+            </select>
           </label>
           <button id="scanBtn" class="btn btn-scan" onclick="triggerScan()">התחל סריקה</button>
         </div>

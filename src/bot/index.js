@@ -5,7 +5,6 @@
 const {
   makeWASocket,
   useMultiFileAuthState,
-  makeInMemoryStore,
   downloadMediaMessage,
   fetchLatestBaileysVersion,
   DisconnectReason,
@@ -26,8 +25,18 @@ const AUTH_DIR = path.join(__dirname, '../../.baileys_auth');
 // Silent logger — suppresses Baileys' internal debug output
 const logger = pino({ level: 'silent' });
 
-// In-memory store: accumulates messages as WhatsApp pushes them (including history sync)
-const store = makeInMemoryStore({ logger });
+// Manual message store: jid -> WAMessage[]
+// Populated by messages.upsert and messaging-history.set events
+const messageStore = new Map();
+
+function storeMessages(messages) {
+  for (const msg of messages) {
+    const jid = msg.key?.remoteJid;
+    if (!jid) continue;
+    if (!messageStore.has(jid)) messageStore.set(jid, []);
+    messageStore.get(jid).push(msg);
+  }
+}
 
 let sock = null;
 let clientReady = false;
@@ -113,16 +122,15 @@ async function runScan(groupId, groupName, days, msgsPerDay = 100, keywords = []
   const keywordLabel = keywords.length ? ` | keywords (${keywordMode.toUpperCase()}): ${keywords.join(', ')}` : '';
   console.log(`\n🔍 [${groupName}] Scanning last ${days} day(s) — up to ${limit} messages${keywordLabel}...`);
 
-  // Read messages from the in-memory store (populated via WhatsApp history sync on connect)
-  const chatStore = store.messages[groupId];
-  if (!chatStore) {
+  // Read messages from the manual store (populated via history sync + live messages)
+  if (!messageStore.has(groupId)) {
     throw new Error(
       `No messages found in memory for "${groupName}". ` +
       `WhatsApp history sync may still be in progress — wait 1-2 minutes after connecting and try again.`
     );
   }
 
-  const allMessages = chatStore.array || [];
+  const allMessages = messageStore.get(groupId);
   console.log(`   ${allMessages.length} messages in store, processing...`);
 
   const relevant = allMessages.filter(msg => {
@@ -209,10 +217,13 @@ async function connectToWhatsApp() {
     syncFullHistory: true,    // request full message history on connect
   });
 
-  // Attach store so it accumulates all incoming messages + history
-  store.bind(sock.ev);
-
   sock.ev.on('creds.update', saveCreds);
+
+  // Accumulate live messages
+  sock.ev.on('messages.upsert', ({ messages }) => storeMessages(messages));
+
+  // Accumulate history sync (fires after connect with syncFullHistory: true)
+  sock.ev.on('messaging-history.set', ({ messages }) => storeMessages(messages));
 
   sock.ev.on('connection.update', ({ connection, lastDisconnect, qr }) => {
     if (qr) {

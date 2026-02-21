@@ -431,6 +431,22 @@ main {
   color: #999;
 }
 
+.item-group-tag {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #128c7e;
+  background: #e8f5e9;
+  border-radius: 20px;
+  padding: 0.15rem 0.6rem;
+  align-self: flex-start;
+}
+
+.item-no-contact {
+  color: #e53935;
+  font-style: italic;
+}
+
 /* Status badge */
 .status-badge {
   display: inline-block;

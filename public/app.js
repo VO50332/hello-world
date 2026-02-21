@@ -206,6 +206,15 @@ function createCard(item) {
   badge.textContent = item.is_taken ? 'נלקח' : 'זמין';
   body.appendChild(badge);
 
+  // Group tag (shown when more than one group exists)
+  const groupName = groups.find(g => g.id === item.group_id)?.name;
+  if (groupName && groups.length > 1) {
+    const tag = document.createElement('span');
+    tag.className = 'item-group-tag';
+    tag.textContent = '📍 ' + groupName;
+    body.appendChild(tag);
+  }
+
   // Description text
   const desc = document.createElement('p');
   desc.className = 'item-description';
@@ -216,16 +225,22 @@ function createCard(item) {
   const meta = document.createElement('div');
   meta.className = 'item-meta';
 
-  // wa.me requires digits only (international format, no +/spaces/dashes)
+  // Contact — always shown
   const waPhone = (item.phone || '').replace(/\D/g, '');
+  const contact = document.createElement('div');
   if (waPhone.length >= 7) {
-    const contact = document.createElement('div');
     contact.className = 'item-contact';
     contact.innerHTML = `📞 <a href="https://wa.me/${waPhone}" target="_blank" rel="noopener">${
       item.sender_name || item.phone
     }</a>`;
-    meta.appendChild(contact);
+  } else if (item.sender_name || item.phone) {
+    contact.className = 'item-contact';
+    contact.textContent = `📞 ${item.sender_name || item.phone}`;
+  } else {
+    contact.className = 'item-contact item-no-contact';
+    contact.textContent = '⚠️ אין פרטי קשר';
   }
+  meta.appendChild(contact);
 
   const date = document.createElement('div');
   date.className = 'item-date';

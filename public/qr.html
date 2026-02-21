@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>חיבור WhatsApp</title>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+  <style>
+    body {
+      font-family: 'Segoe UI', Arial, sans-serif;
+      background: #f0f4f8;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+      color: #1a1a2e;
+    }
+    h1 { color: #128c7e; margin-bottom: 0.3rem; }
+    p  { color: #555; margin: 0.3rem 0 1.2rem; font-size: 0.95rem; }
+    #box {
+      background: white;
+      border-radius: 16px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+      padding: 2rem;
+      text-align: center;
+      max-width: 340px;
+      width: 100%;
+    }
+    canvas { display: block; margin: 0 auto; }
+    #status {
+      margin-top: 1.2rem;
+      font-size: 0.9rem;
+      color: #888;
+    }
+    .connected { color: #2e7d32; font-weight: 700; font-size: 1.1rem; }
+  </style>
+</head>
+<body>
+  <div id="box">
+    <h1>📱 חיבור WhatsApp</h1>
+    <p>סרוק עם WhatsApp → הגדרות → מכשירים מקושרים → קשר מכשיר</p>
+    <canvas id="qr-canvas"></canvas>
+    <div id="status">⏳ טוען קוד QR...</div>
+  </div>
+
+  <script>
+    async function refresh() {
+      const statusEl = document.getElementById('status');
+      const canvas   = document.getElementById('qr-canvas');
+      try {
+        const res  = await fetch('/api/qr');
+        const data = await res.json();
+
+        if (data.connected) {
+          canvas.style.display = 'none';
+          statusEl.className   = 'connected';
+          statusEl.textContent = '✅ מחובר! ניתן לסגור דף זה.';
+          return; // stop polling
+        }
+
+        if (data.qr) {
+          canvas.style.display = '';
+          await QRCode.toCanvas(canvas, data.qr, { width: 260, margin: 1 });
+          statusEl.textContent = '🔄 מתרענן בכל 10 שניות';
+        } else {
+          statusEl.textContent = '⏳ ממתין לקוד QR...';
+        }
+      } catch (e) {
+        statusEl.textContent = '⚠️ שגיאת רשת — מנסה שוב...';
+      }
+      setTimeout(refresh, 10_000);
+    }
+    refresh();
+  </script>
+</body>
+</html>

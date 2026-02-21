@@ -17,10 +17,12 @@ const pino = require('pino');
 const { saveItem, getConfiguredGroups } = require('../db');
 
 // Where to save photos sent in the group
-const UPLOADS_DIR = path.join(__dirname, '../../public/uploads');
+// All persistent data lives under data/ so a single Railway Volume covers everything
+const UPLOADS_DIR = path.join(__dirname, '../../data/uploads');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
-const AUTH_DIR = path.join(__dirname, '../../.baileys_auth');
+const AUTH_DIR = path.join(__dirname, '../../data/baileys_auth');
+if (!fs.existsSync(AUTH_DIR)) fs.mkdirSync(AUTH_DIR, { recursive: true });
 
 // Silent logger — suppresses Baileys' internal debug output
 const logger = pino({ level: 'silent' });
@@ -40,6 +42,7 @@ function storeMessages(messages) {
 
 let sock = null;
 let clientReady = false;
+let currentQr = null; // latest QR string (null once authenticated)
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -227,12 +230,15 @@ async function connectToWhatsApp() {
 
   sock.ev.on('connection.update', ({ connection, lastDisconnect, qr }) => {
     if (qr) {
+      currentQr = qr; // expose via /api/qr for Railway deployments
       console.log('\n📱 Scan this QR code with WhatsApp on your phone:\n');
       qrcode.generate(qr, { small: true });
-      console.log('\nGo to WhatsApp → Settings → Linked Devices → Link a Device\n');
+      console.log('\nOr open  <your-app-url>/qr  in a browser to scan.\n');
+      console.log('Go to WhatsApp → Settings → Linked Devices → Link a Device\n');
     }
 
     if (connection === 'open') {
+      currentQr = null; // no longer needed
       clientReady = true;
       const configured = getConfiguredGroups();
       if (configured.length > 0) {
@@ -274,4 +280,4 @@ async function getChats() {
 
 connectToWhatsApp();
 
-module.exports = { isReady: () => clientReady, getChats, startScan, getScanState };
+module.exports = { isReady: () => clientReady, getQr: () => currentQr, getChats, startScan, getScanState };

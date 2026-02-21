@@ -31,10 +31,21 @@ function requireAuth(req, res, next) {
 // Parse JSON request bodies
 app.use(express.json());
 
-// Serve static files (website + uploaded photos)
+// Uploaded photos live in data/uploads/ (persisted via Railway Volume).
+// Must be registered BEFORE the catch-all static middleware below.
+app.use('/uploads', express.static(path.join(__dirname, '../../data/uploads')));
+
+// Serve static files (website)
 app.use(express.static(path.join(__dirname, '../../public')));
 
 // ── API Routes ───────────────────────────────────────────────────────────────
+
+// GET /api/qr — returns the current QR string so the /qr browser page can render it.
+// Only has a value before the first WhatsApp authentication; null once connected.
+app.get('/api/qr', (req, res) => {
+  const { getQr, isReady } = require('../bot');
+  res.json({ qr: getQr(), connected: isReady() });
+});
 
 // GET /api/auth-required — lets the frontend know whether a PIN is needed
 app.get('/api/auth-required', (req, res) => {

@@ -1,87 +1,43 @@
-// WhatsApp Bot — scan-only mode
-// Uses whatsapp-web.js which controls WhatsApp Web in a hidden browser.
+// WhatsApp Bot — powered by Baileys (no browser required)
 // On first run it will show a QR code — scan it with your phone to log in.
-// Live monitoring has been removed; use the "Scan" panel on the website instead.
+// Session is saved to .baileys_auth/ so you only need to scan once.
 
-const { Client, LocalAuth } = require('whatsapp-web.js');
+const {
+  makeWASocket,
+  useMultiFileAuthState,
+  makeInMemoryStore,
+  downloadMediaMessage,
+  fetchLatestBaileysVersion,
+  DisconnectReason,
+} = require('@whiskeysockets/baileys');
+const { Boom } = require('@hapi/boom');
 const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 const path = require('path');
+const pino = require('pino');
 const { saveItem, getConfiguredGroups } = require('../db');
 
 // Where to save photos sent in the group
 const UPLOADS_DIR = path.join(__dirname, '../../public/uploads');
-if (!fs.existsSync(UPLOADS_DIR)) {
-  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-}
+if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
-// ─────────────────────────────────────────────────────────────────────────────
+const AUTH_DIR = path.join(__dirname, '../../.baileys_auth');
 
-const client = new Client({
-  authStrategy: new LocalAuth({ dataPath: path.join(__dirname, '../../.wwebjs_auth') }),
-  puppeteer: {
-    headless: true,
-    protocolTimeout: 120000, // 2 min — for photo downloads on slow connections
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-    ],
-  },
-});
+// Silent logger — suppresses Baileys' internal debug output
+const logger = pino({ level: 'silent' });
 
+// In-memory store: accumulates messages as WhatsApp pushes them (including history sync)
+const store = makeInMemoryStore({ logger });
+
+let sock = null;
 let clientReady = false;
-
-client.on('qr', (qr) => {
-  console.log('\n📱 Scan this QR code with WhatsApp on your phone:\n');
-  qrcode.generate(qr, { small: true });
-  console.log('\nGo to WhatsApp → Settings → Linked Devices → Link a Device\n');
-});
-
-client.on('authenticated', () => {
-  console.log('✅ WhatsApp authenticated successfully');
-});
-
-client.on('auth_failure', (msg) => {
-  console.error('❌ Authentication failed:', msg);
-});
-
-client.on('ready', () => {
-  clientReady = true;
-  const configured = getConfiguredGroups();
-  if (configured.length > 0) {
-    console.log(`✅ WhatsApp ready — ${configured.length} group(s) configured for scanning:`);
-    for (const g of configured) console.log(`   • "${g.name}" (${g.id})`);
-  } else {
-    console.log('✅ WhatsApp ready. No groups configured yet.');
-    console.log('   Open the website and use ⚙️ ניהול קבוצות to add groups.');
-  }
-});
-
-client.on('disconnected', (reason) => {
-  console.log('Bot disconnected:', reason);
-  client.initialize();
-});
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-// Returns true if the message body text contains markers meaning "no longer available"
 function isUnavailableMessage(text) {
   return text ? /💾|❌/.test(text) : false;
 }
 
-// Returns true if the message has been reacted to with 💾 or ❌ (= no longer available)
-function hasUnavailableReaction(msg) {
-  const reactions = msg._data?.reactions;
-  if (!Array.isArray(reactions) || reactions.length === 0) return false;
-  return reactions.some(r => r.aggregateEmoji === '💾' || r.aggregateEmoji === '❌');
-}
-
-// Returns true when the text matches keywords.
-// mode='or'  → at least one keyword must appear (default)
-// mode='and' → every keyword must appear
-// If no keywords are configured, every message matches (no filter applied).
 function matchesKeywords(text, keywords, mode = 'or') {
   if (!keywords || keywords.length === 0) return true;
   const lower = (text || '').toLowerCase();
@@ -90,9 +46,18 @@ function matchesKeywords(text, keywords, mode = 'or') {
     : keywords.some(k => lower.includes(k));
 }
 
+// Extract plain text caption/body from a Baileys WAMessage
+function getMessageText(msg) {
+  const m = msg.message;
+  if (!m) return '';
+  return m.conversation
+    || m.extendedTextMessage?.text
+    || m.imageMessage?.caption
+    || m.videoMessage?.caption
+    || '';
+}
+
 // ── History scanner ───────────────────────────────────────────────────────────
-// Groups are loaded fresh from the DB each time a scan starts, so any groups
-// added via the web UI are picked up without restarting the server.
 
 let scanState = { running: false, days: null, startedAt: null, result: null, error: null };
 
@@ -100,29 +65,23 @@ function getScanState() {
   return { ...scanState };
 }
 
-// Starts a background scan and returns immediately.
-// groupId: which group to scan. If omitted, scans all configured groups sequentially.
 function startScan(days, msgsPerDay, keywords = [], keywordMode = 'or', groupId = null) {
   if (scanState.running) return { alreadyRunning: true };
 
-  // Load groups fresh from DB so newly added groups are included
   const configuredGroups = getConfiguredGroups();
   const configMap = new Map(configuredGroups.map(g => [g.id, g.name]));
-
   const idsToScan = groupId ? [groupId] : configuredGroups.map(g => g.id);
 
-  if (idsToScan.length === 0) {
+  if (idsToScan.length === 0)
     return { error: 'אין קבוצות מוגדרות. הוסף קבוצה דרך ממשק הניהול (⚙️ ניהול קבוצות).' };
-  }
+
   for (const id of idsToScan) {
-    if (!id.endsWith('@g.us')) {
+    if (!id.endsWith('@g.us'))
       return { error: `Invalid group ID "${id}". It must end with @g.us.` };
-    }
   }
 
   scanState = { running: true, days, keywords, keywordMode, groupId, startedAt: new Date().toISOString(), result: null, error: null };
 
-  // Run in background — do NOT await
   runScanAll(idsToScan, configMap, days, msgsPerDay, keywords, keywordMode).then(result => {
     scanState = { running: false, days, keywords, keywordMode, groupId, startedAt: scanState.startedAt, result, error: null };
   }).catch(err => {
@@ -134,7 +93,6 @@ function startScan(days, msgsPerDay, keywords = [], keywordMode = 'or', groupId 
   return { started: true };
 }
 
-// Scan multiple groups sequentially and aggregate results.
 async function runScanAll(groupIds, configMap, days, msgsPerDay, keywords, keywordMode = 'or') {
   let totalFetched = 0, totalWithinWindow = 0, totalSaved = 0, totalSkipped = 0;
   for (const id of groupIds) {
@@ -149,31 +107,34 @@ async function runScanAll(groupIds, configMap, days, msgsPerDay, keywords, keywo
 
 async function runScan(groupId, groupName, days, msgsPerDay = 100, keywords = [], keywordMode = 'or') {
   const cutoffMs = Date.now() - days * 24 * 60 * 60 * 1000;
+  const cutoffSec = cutoffMs / 1000;
   const limit = days * msgsPerDay;
 
   const keywordLabel = keywords.length ? ` | keywords (${keywordMode.toUpperCase()}): ${keywords.join(', ')}` : '';
   console.log(`\n🔍 [${groupName}] Scanning last ${days} day(s) — up to ${limit} messages${keywordLabel}...`);
 
-  let chat;
-  try {
-    chat = await client.getChatById(groupId);
-  } catch (err) {
-    throw new Error(`Could not load "${groupName}": ${err?.message || err}`);
+  // Read messages from the in-memory store (populated via WhatsApp history sync on connect)
+  const chatStore = store.messages[groupId];
+  if (!chatStore) {
+    throw new Error(
+      `No messages found in memory for "${groupName}". ` +
+      `WhatsApp history sync may still be in progress — wait 1-2 minutes after connecting and try again.`
+    );
   }
-  if (!chat) throw new Error(`Group not found: "${groupName}" (${groupId})`);
 
-  console.log(`   Found chat: "${chat.name}" — loading messages...`);
-  const messages = await chat.fetchMessages({ limit });
-  console.log(`   Fetched ${messages.length} messages, processing...`);
+  const allMessages = chatStore.array || [];
+  console.log(`   ${allMessages.length} messages in store, processing...`);
 
-  const relevant = messages.filter(msg => {
-    if (msg.timestamp * 1000 < cutoffMs) return false;
-    if (!msg.hasMedia) return false;
-    if (isUnavailableMessage(msg.body)) return false;
-    if (hasUnavailableReaction(msg)) return false;
-    if (!matchesKeywords(msg.body, keywords, keywordMode)) return false;
+  const relevant = allMessages.filter(msg => {
+    const ts = Number(msg.messageTimestamp);
+    if (ts < cutoffSec) return false;
+    if (!msg.message?.imageMessage) return false;  // images only
+    const text = getMessageText(msg);
+    if (isUnavailableMessage(text)) return false;
+    if (!matchesKeywords(text, keywords, keywordMode)) return false;
     return true;
-  });
+  }).slice(-limit);
+
   console.log(`   ${relevant.length} relevant messages with photos.`);
 
   const CONCURRENCY = 5;
@@ -183,12 +144,14 @@ async function runScan(groupId, groupName, days, msgsPerDay = 100, keywords = []
     const batch = relevant.slice(i, i + CONCURRENCY);
     await Promise.all(batch.map(async (msg, batchIdx) => {
       try {
-        const media = await msg.downloadMedia();
-        if (media && media.mimetype?.startsWith('image/')) {
-          const ext = media.mimetype.split('/')[1]?.split(';')[0] || 'jpg';
-          const filename = `${Date.now()}_${msg.id.id}.${ext}`;
-          const filePath = path.join(UPLOADS_DIR, filename);
-          fs.writeFileSync(filePath, Buffer.from(media.data, 'base64'));
+        const buffer = await downloadMediaMessage(
+          msg, 'buffer', {},
+          { logger, reuploadRequest: sock.updateMediaMessage }
+        );
+        if (buffer) {
+          const ext = msg.message.imageMessage.mimetype?.split('/')[1]?.split(';')[0] || 'jpg';
+          const filename = `${Date.now()}_${msg.key.id}.${ext}`;
+          fs.writeFileSync(path.join(UPLOADS_DIR, filename), buffer);
           photoPaths[i + batchIdx] = `/uploads/${filename}`;
         }
       } catch (_) { /* skip undownloadable media */ }
@@ -202,14 +165,14 @@ async function runScan(groupId, groupName, days, msgsPerDay = 100, keywords = []
     const photoPath = photoPaths[idx];
     if (!photoPath) continue;
 
-    const rawAuthor = msg.author || msg._data?.author || '';
-    const phone = rawAuthor ? rawAuthor.replace('@c.us', '') : null;
-    const senderName = msg._data?.notifyName || phone;
-    const description = msg.body?.trim();
-    const messageAt = new Date(msg.timestamp * 1000).toISOString();
+    const rawParticipant = msg.key.participant || '';
+    const phone = rawParticipant.replace('@s.whatsapp.net', '').replace('@c.us', '') || null;
+    const senderName = msg.pushName || phone;
+    const description = getMessageText(msg)?.trim();
+    const messageAt = new Date(Number(msg.messageTimestamp) * 1000).toISOString();
 
     const itemId = saveItem({
-      messageId: msg.id.id,
+      messageId: msg.key.id,
       description: description || '(ללא תיאור)',
       phone,
       senderName,
@@ -223,9 +186,81 @@ async function runScan(groupId, groupName, days, msgsPerDay = 100, keywords = []
   }
 
   console.log(`✅ [${groupName}] Scan done — ${saved} new, ${skipped} duplicates.\n`);
-  return { fetched: messages.length, withinWindow: relevant.length, saved, skipped };
+  return { fetched: allMessages.length, withinWindow: relevant.length, saved, skipped };
 }
 
-client.initialize();
+// ── WhatsApp connection ───────────────────────────────────────────────────────
 
-module.exports = { client, isReady: () => clientReady, startScan, getScanState };
+async function connectToWhatsApp() {
+  const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
+
+  let version;
+  try {
+    ({ version } = await fetchLatestBaileysVersion());
+  } catch {
+    version = [2, 3000, 1017531287]; // bundled fallback
+  }
+
+  sock = makeWASocket({
+    version,
+    auth: state,
+    logger,
+    printQRInTerminal: false, // we print it ourselves via qrcode-terminal
+    syncFullHistory: true,    // request full message history on connect
+  });
+
+  // Attach store so it accumulates all incoming messages + history
+  store.bind(sock.ev);
+
+  sock.ev.on('creds.update', saveCreds);
+
+  sock.ev.on('connection.update', ({ connection, lastDisconnect, qr }) => {
+    if (qr) {
+      console.log('\n📱 Scan this QR code with WhatsApp on your phone:\n');
+      qrcode.generate(qr, { small: true });
+      console.log('\nGo to WhatsApp → Settings → Linked Devices → Link a Device\n');
+    }
+
+    if (connection === 'open') {
+      clientReady = true;
+      const configured = getConfiguredGroups();
+      if (configured.length > 0) {
+        console.log(`✅ WhatsApp ready — ${configured.length} group(s) configured for scanning:`);
+        for (const g of configured) console.log(`   • "${g.name}" (${g.id})`);
+      } else {
+        console.log('✅ WhatsApp ready. No groups configured yet.');
+        console.log('   Open the website and use ⚙️ ניהול קבוצות to add groups.');
+      }
+      console.log('   ⏳ History sync is running in the background — wait ~1 min before scanning.');
+    }
+
+    if (connection === 'close') {
+      clientReady = false;
+      const shouldReconnect = (lastDisconnect?.error instanceof Boom)
+        ? lastDisconnect.error.output?.statusCode !== DisconnectReason.loggedOut
+        : true;
+      if (shouldReconnect) {
+        console.log('🔄 Connection closed — reconnecting...');
+        connectToWhatsApp();
+      } else {
+        console.log('🚪 Logged out. Delete .baileys_auth/ and restart to re-link.');
+      }
+    }
+  });
+}
+
+// ── Get all WhatsApp groups the bot is a member of ───────────────────────────
+
+async function getChats() {
+  if (!sock) throw new Error('Not connected to WhatsApp');
+  const participating = await sock.groupFetchAllParticipating();
+  return Object.values(participating).map(g => ({
+    id: g.id,
+    name: g.subject,
+    participants: g.participants?.length ?? '?',
+  }));
+}
+
+connectToWhatsApp();
+
+module.exports = { isReady: () => clientReady, getChats, startScan, getScanState };

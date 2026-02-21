@@ -128,14 +128,11 @@ app.delete('/api/items', requireAuth, (req, res) => {
 // GET /api/scan/status   — check whether the scan is still running and see results.
 app.get('/api/chats', requireAuth, async (req, res) => {
   try {
-    const { client, isReady } = require('../bot');
+    const { getChats, isReady } = require('../bot');
     if (!isReady()) {
       return res.status(503).json({ ok: false, error: 'WhatsApp client is not ready yet. Wait for the QR code to be scanned and the bot to print "✅ WhatsApp ready!", then try again.' });
     }
-    const chats = await client.getChats();
-    const groups = chats
-      .filter(c => c.isGroup)
-      .map(c => ({ id: c.id._serialized, name: c.name, participants: c.participants?.length ?? '?' }));
+    const groups = await getChats();
     res.json({ ok: true, groups });
   } catch (err) {
     res.status(500).json({ ok: false, error: err?.message || String(err) });

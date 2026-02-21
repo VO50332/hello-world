@@ -3,6 +3,7 @@
 
 const express = require('express');
 const path = require('path');
+const crypto = require('crypto');
 const {
   getAvailableItems, getAllItems, getGroupIds,
   markItemTaken, markItemAvailable, deleteItem, deleteAllItems,
@@ -12,6 +13,21 @@ const {
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// ── Admin PIN auth ────────────────────────────────────────────────────────────
+const ADMIN_PIN = process.env.ADMIN_PIN || '';
+const validTokens = new Set(); // cleared on server restart — intentional
+
+function authEnabled() { return ADMIN_PIN.length > 0; }
+
+function requireAuth(req, res, next) {
+  if (!authEnabled()) return next();
+  const header = req.headers['authorization'] || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : '';
+  if (!token || !validTokens.has(token))
+    return res.status(401).json({ ok: false, error: 'נדרשת הזדהות עם PIN' });
+  next();
+}
+
 // Parse JSON request bodies
 app.use(express.json());
 
@@ -19,6 +35,30 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, '../../public')));
 
 // ── API Routes ───────────────────────────────────────────────────────────────
+
+// GET /api/auth-required — lets the frontend know whether a PIN is needed
+app.get('/api/auth-required', (req, res) => {
+  res.json({ required: authEnabled() });
+});
+
+// POST /api/auth — verify PIN and return a session token
+app.post('/api/auth', (req, res) => {
+  if (!authEnabled()) return res.json({ ok: true, token: 'no-auth' });
+  const { pin } = req.body || {};
+  if (!pin || pin !== ADMIN_PIN)
+    return res.status(401).json({ ok: false, error: 'PIN שגוי' });
+  const token = crypto.randomBytes(24).toString('hex');
+  validTokens.add(token);
+  res.json({ ok: true, token });
+});
+
+// DELETE /api/auth — logout (invalidate token)
+app.delete('/api/auth', (req, res) => {
+  const header = req.headers['authorization'] || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : '';
+  validTokens.delete(token);
+  res.json({ ok: true });
+});
 
 // GET /api/groups — return configured groups (id + name) + any legacy DB-only groups
 app.get('/api/groups', (req, res) => {
@@ -34,7 +74,7 @@ app.get('/api/groups', (req, res) => {
 
 // POST /api/groups — add (or rename) a configured group
 // Body: { id: "120363XXX@g.us", name: "קח תן רוממה" }
-app.post('/api/groups', (req, res) => {
+app.post('/api/groups', requireAuth, (req, res) => {
   const { id, name } = req.body || {};
   if (!id || !id.endsWith('@g.us')) {
     return res.status(400).json({ ok: false, error: 'מזהה קבוצה לא תקין — חייב להסתיים ב-@g.us' });
@@ -44,7 +84,7 @@ app.post('/api/groups', (req, res) => {
 });
 
 // DELETE /api/groups/:id — remove a configured group (does NOT delete its items)
-app.delete('/api/groups/:id', (req, res) => {
+app.delete('/api/groups/:id', requireAuth, (req, res) => {
   removeConfiguredGroup(req.params.id);
   res.json({ ok: true });
 });
@@ -71,13 +111,13 @@ app.patch('/api/items/:id/available', (req, res) => {
 });
 
 // DELETE /api/items/:id — remove an item
-app.delete('/api/items/:id', (req, res) => {
+app.delete('/api/items/:id', requireAuth, (req, res) => {
   deleteItem(Number(req.params.id));
   res.json({ ok: true });
 });
 
 // DELETE /api/items — remove ALL items
-app.delete('/api/items', (req, res) => {
+app.delete('/api/items', requireAuth, (req, res) => {
   deleteAllItems();
   res.json({ ok: true });
 });
@@ -86,7 +126,7 @@ app.delete('/api/items', (req, res) => {
 // GET /api/chats         — list all WhatsApp groups the bot is a member of.
 // GET /api/scan?days=7   — starts a background scan and returns immediately.
 // GET /api/scan/status   — check whether the scan is still running and see results.
-app.get('/api/chats', async (req, res) => {
+app.get('/api/chats', requireAuth, async (req, res) => {
   try {
     const { client, isReady } = require('../bot');
     if (!isReady()) {
@@ -102,7 +142,7 @@ app.get('/api/chats', async (req, res) => {
   }
 });
 
-app.get('/api/scan', (req, res) => {
+app.get('/api/scan', requireAuth, (req, res) => {
   const days = Math.max(1, Math.min(Number(req.query.days) || 7, 180));
   const msgsPerDay = Math.max(1, Number(req.query.msgsPerDay) || 500);
   const keywords = req.query.keywords

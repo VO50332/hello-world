@@ -85,6 +85,19 @@ header .subtitle {
 }
 .btn-clear-all:hover { background: rgba(220,50,50,0.5); }
 
+.btn-lock-admin {
+  background: rgba(255,255,255,0.15);
+  color: white;
+  border: 1px solid rgba(255,255,255,0.4);
+  border-radius: 8px;
+  padding: 0.4rem 0.9rem;
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.btn-lock-admin:hover { background: rgba(255,255,255,0.3); }
+
 /* ── Group filter tabs ────────────────────────────────────────── */
 #group-tabs {
   display: flex;

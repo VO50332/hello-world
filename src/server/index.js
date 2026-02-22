@@ -31,15 +31,6 @@ function requireAuth(req, res, next) {
   return res.status(401).json({ ok: false, error: 'נדרשת הזדהות עם PIN' });
 }
 
-// Strip full phone numbers from items for unauthenticated visitors.
-// Keeps sender_name so posts still show who offered the item.
-function maskItemsForPublic(items) {
-  return items.map(({ phone, ...rest }) => ({
-    ...rest,
-    phone: phone ? '****' + phone.slice(-4) : null,
-  }));
-}
-
 // Parse JSON request bodies
 app.use(express.json());
 
@@ -114,12 +105,10 @@ app.delete('/api/groups/:id', requireAuth, (req, res) => {
 
 // GET /api/items — return available items (used by the website)
 // Optional ?group=<groupId> to filter by group, ?all=true to include taken items.
-// Phone numbers are masked for unauthenticated visitors to protect member privacy.
 app.get('/api/items', (req, res) => {
   const showAll = req.query.all === 'true';
   const groupId = req.query.group || null;
-  let items = showAll ? getAllItems(groupId) : getAvailableItems(groupId);
-  if (!isAuthenticated(req)) items = maskItemsForPublic(items);
+  const items = showAll ? getAllItems(groupId) : getAvailableItems(groupId);
   res.json(items);
 });
 

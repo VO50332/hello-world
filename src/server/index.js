@@ -19,13 +19,25 @@ const validTokens = new Set(); // cleared on server restart — intentional
 
 function authEnabled() { return ADMIN_PIN.length > 0; }
 
-function requireAuth(req, res, next) {
-  if (!authEnabled()) return next();
+function isAuthenticated(req) {
+  if (!authEnabled()) return true;
   const header = req.headers['authorization'] || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : '';
-  if (!token || !validTokens.has(token))
-    return res.status(401).json({ ok: false, error: 'נדרשת הזדהות עם PIN' });
-  next();
+  return token && validTokens.has(token);
+}
+
+function requireAuth(req, res, next) {
+  if (isAuthenticated(req)) return next();
+  return res.status(401).json({ ok: false, error: 'נדרשת הזדהות עם PIN' });
+}
+
+// Strip full phone numbers from items for unauthenticated visitors.
+// Keeps sender_name so posts still show who offered the item.
+function maskItemsForPublic(items) {
+  return items.map(({ phone, ...rest }) => ({
+    ...rest,
+    phone: phone ? '****' + phone.slice(-4) : null,
+  }));
 }
 
 // Parse JSON request bodies
@@ -41,8 +53,8 @@ app.use(express.static(path.join(__dirname, '../../public')));
 // ── API Routes ───────────────────────────────────────────────────────────────
 
 // GET /api/qr — returns the current QR string so the /qr browser page can render it.
-// Only has a value before the first WhatsApp authentication; null once connected.
-app.get('/api/qr', (req, res) => {
+// Protected: exposing the QR publicly would let anyone hijack the WhatsApp session.
+app.get('/api/qr', requireAuth, (req, res) => {
   const { getQr, isReady } = require('../bot');
   res.json({ qr: getQr(), connected: isReady() });
 });
@@ -102,21 +114,23 @@ app.delete('/api/groups/:id', requireAuth, (req, res) => {
 
 // GET /api/items — return available items (used by the website)
 // Optional ?group=<groupId> to filter by group, ?all=true to include taken items.
+// Phone numbers are masked for unauthenticated visitors to protect member privacy.
 app.get('/api/items', (req, res) => {
   const showAll = req.query.all === 'true';
   const groupId = req.query.group || null;
-  const items = showAll ? getAllItems(groupId) : getAvailableItems(groupId);
+  let items = showAll ? getAllItems(groupId) : getAvailableItems(groupId);
+  if (!isAuthenticated(req)) items = maskItemsForPublic(items);
   res.json(items);
 });
 
 // PATCH /api/items/:id/taken — mark an item as taken
-app.patch('/api/items/:id/taken', (req, res) => {
+app.patch('/api/items/:id/taken', requireAuth, (req, res) => {
   markItemTaken(Number(req.params.id));
   res.json({ ok: true });
 });
 
 // PATCH /api/items/:id/available — mark an item as available again
-app.patch('/api/items/:id/available', (req, res) => {
+app.patch('/api/items/:id/available', requireAuth, (req, res) => {
   markItemAvailable(Number(req.params.id));
   res.json({ ok: true });
 });
@@ -181,6 +195,13 @@ app.get('/api/scan/status', (req, res) => {
 // ── Start server ─────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`🌐 Website running at http://localhost:${PORT}`);
+  if (!authEnabled()) {
+    console.warn('');
+    console.warn('⚠️  WARNING: ADMIN_PIN is not set!');
+    console.warn('   Anyone with your URL can delete items, manage groups, and access the QR code.');
+    console.warn('   Set ADMIN_PIN in your .env file to secure the admin interface.');
+    console.warn('');
+  }
 });
 
 module.exports = app;

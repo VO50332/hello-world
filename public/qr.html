@@ -35,6 +35,26 @@
       color: #888;
     }
     .connected { color: #2e7d32; font-weight: 700; font-size: 1.1rem; }
+    #pin-form { margin-top: 1rem; }
+    #pin-form input {
+      padding: 0.5rem 1rem;
+      font-size: 1.1rem;
+      border: 2px solid #ddd;
+      border-radius: 8px;
+      text-align: center;
+      width: 140px;
+    }
+    #pin-form button {
+      padding: 0.5rem 1.2rem;
+      font-size: 1rem;
+      background: #128c7e;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      margin-right: 0.5rem;
+    }
+    #pin-error { color: #d32f2f; margin-top: 0.5rem; font-size: 0.85rem; }
   </style>
 </head>
 <body>
@@ -42,15 +62,78 @@
     <h1>📱 חיבור WhatsApp</h1>
     <p>סרוק עם WhatsApp → הגדרות → מכשירים מקושרים → קשר מכשיר</p>
     <canvas id="qr-canvas"></canvas>
-    <div id="status">⏳ טוען קוד QR...</div>
+    <div id="status">⏳ טוען...</div>
+
+    <div id="pin-form" style="display:none">
+      <input id="pin-input" type="password" placeholder="PIN" autocomplete="off" />
+      <button onclick="submitPin()">כניסה</button>
+      <div id="pin-error"></div>
+    </div>
   </div>
 
   <script>
+    let token = '';
+
+    async function start() {
+      // Check if auth is required
+      const authRes = await fetch('/api/auth-required');
+      const authData = await authRes.json();
+
+      if (!authData.required) {
+        // No PIN set — go directly to polling
+        refresh();
+        return;
+      }
+
+      // Auth required — show PIN form
+      document.getElementById('status').textContent = '🔒 נדרש PIN כדי לצפות בקוד QR';
+      document.getElementById('pin-form').style.display = '';
+      document.getElementById('pin-input').focus();
+    }
+
+    async function submitPin() {
+      const pin = document.getElementById('pin-input').value;
+      const errEl = document.getElementById('pin-error');
+      errEl.textContent = '';
+
+      try {
+        const res = await fetch('/api/auth', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pin }),
+        });
+        const data = await res.json();
+        if (data.ok) {
+          token = data.token;
+          document.getElementById('pin-form').style.display = 'none';
+          document.getElementById('status').textContent = '⏳ טוען קוד QR...';
+          refresh();
+        } else {
+          errEl.textContent = 'PIN שגוי';
+        }
+      } catch (e) {
+        errEl.textContent = 'שגיאת רשת';
+      }
+    }
+
+    // Allow pressing Enter in the PIN field
+    document.getElementById('pin-input').addEventListener('keydown', e => {
+      if (e.key === 'Enter') submitPin();
+    });
+
     async function refresh() {
       const statusEl = document.getElementById('status');
       const canvas   = document.getElementById('qr-canvas');
       try {
-        const res  = await fetch('/api/qr');
+        const headers = token ? { 'Authorization': 'Bearer ' + token } : {};
+        const res  = await fetch('/api/qr', { headers });
+
+        if (res.status === 401) {
+          statusEl.textContent = '🔒 נדרש PIN כדי לצפות בקוד QR';
+          document.getElementById('pin-form').style.display = '';
+          return; // stop polling — user needs to re-auth
+        }
+
         const data = await res.json();
 
         if (data.connected) {
@@ -72,7 +155,8 @@
       }
       setTimeout(refresh, 10_000);
     }
-    refresh();
+
+    start();
   </script>
 </body>
 </html>

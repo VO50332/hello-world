@@ -250,25 +250,27 @@ function createCard(item) {
   body.appendChild(meta);
   card.appendChild(body);
 
-  // ── Action buttons ────────────────────────────────────────────
+  // ── Action buttons (only for authenticated admin) ────────────
   const actions = document.createElement('div');
   actions.className = 'item-actions';
 
-  if (!item.is_taken) {
+  if (isAdminMode() && !item.is_taken) {
     const takenBtn = document.createElement('button');
     takenBtn.className = 'btn btn-taken';
     takenBtn.textContent = 'סמן כנלקח';
     takenBtn.onclick = async () => {
-      await fetch(`/api/items/${item.id}/taken`, { method: 'PATCH' });
+      const res = await fetch(`/api/items/${item.id}/taken`, { method: 'PATCH', headers: authHeaders() });
+      if (res.status === 401) { handleAuthError(); return; }
       loadItems();
     };
     actions.appendChild(takenBtn);
-  } else {
+  } else if (isAdminMode() && item.is_taken) {
     const availBtn = document.createElement('button');
     availBtn.className = 'btn btn-avail';
     availBtn.textContent = 'סמן כזמין';
     availBtn.onclick = async () => {
-      await fetch(`/api/items/${item.id}/available`, { method: 'PATCH' });
+      const res = await fetch(`/api/items/${item.id}/available`, { method: 'PATCH', headers: authHeaders() });
+      if (res.status === 401) { handleAuthError(); return; }
       loadItems();
     };
     actions.appendChild(availBtn);

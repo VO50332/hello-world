@@ -187,6 +187,27 @@ app.get('/api/sync-status', (req, res) => {
   res.json({ ok: true, connected: isReady(), ...getSyncStatus() });
 });
 
+// GET /api/store-debug — compare message store JIDs vs configured groups (admin only)
+app.get('/api/store-debug', requireAuth, (req, res) => {
+  const { getSyncStatus, isReady } = require('../bot');
+  const sync = getSyncStatus();
+  const configured = getConfiguredGroups();
+  const storeJids = Object.keys(sync.groupCounts);
+  const report = configured.map(g => ({
+    configured: { id: g.id, name: g.name },
+    inStore: !!sync.groupCounts[g.id],
+    storeMessageCount: sync.groupCounts[g.id] ?? 0,
+  }));
+  const ungrouped = storeJids.filter(jid => !configured.find(g => g.id === jid));
+  res.json({
+    ok: true,
+    connected: isReady(),
+    historySyncComplete: sync.historySyncComplete,
+    configuredGroups: report,
+    otherJidsInStore: ungrouped.map(jid => ({ jid, count: sync.groupCounts[jid] })),
+  });
+});
+
 // ── Start server ─────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`🌐 Website running at http://localhost:${PORT}`);

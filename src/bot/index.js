@@ -180,10 +180,19 @@ async function runScan(groupId, groupName, days, msgsPerDay = 100, keywords = []
   // Read messages from the manual store (populated via history sync + live messages).
   // If history sync is still in progress, wait up to 60 seconds for messages to arrive.
   if (!messageStore.has(groupId)) {
+    // Log what IS in the store to help diagnose JID mismatches
+    const storeJids = [...messageStore.keys()];
+    console.warn(`⚠️  [${groupName}] Group "${groupId}" not found in store.`);
+    console.warn(`   Store contains ${storeJids.length} group(s): ${storeJids.join(', ') || '(empty)'}`);
+
     if (historySyncComplete) {
+      const hint = storeJids.length > 0
+        ? ` Groups in store: ${storeJids.join(', ')}`
+        : ' The message store is empty — WhatsApp did not send any history for this session.';
       throw new Error(
-        `No messages found for "${groupName}" — history sync finished but this group had no messages. ` +
-        `Verify the group is correct, or wait for new messages to arrive.`
+        `No messages found for "${groupName}" (${groupId}).\n` +
+        `History sync is complete but this group has no messages.${hint}\n` +
+        `Tip: Check that the group ID is correct, or wait for new messages to arrive in the group.`
       );
     }
     console.log(`   ⏳ No messages yet for "${groupName}" — waiting for history sync...`);
@@ -195,10 +204,14 @@ async function runScan(groupId, groupName, days, msgsPerDay = 100, keywords = []
       await new Promise(r => setTimeout(r, POLL_INTERVAL));
     }
     if (!messageStore.has(groupId)) {
+      const storeJids2 = [...messageStore.keys()];
+      const hint = storeJids2.length > 0
+        ? ` Groups in store: ${storeJids2.join(', ')}`
+        : ' The message store is empty.';
       throw new Error(
-        `No messages found for "${groupName}" after waiting ${Math.round((Date.now() - waitStart) / 1000)}s. ` +
+        `No messages found for "${groupName}" (${groupId}) after waiting ${Math.round((Date.now() - waitStart) / 1000)}s. ` +
         (historySyncComplete
-          ? 'History sync completed but this group had no messages. Verify the group is correct.'
+          ? `History sync completed but this group had no messages.${hint}`
           : 'History sync is still in progress — try again in a minute.')
       );
     }

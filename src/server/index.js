@@ -181,6 +181,12 @@ app.get('/api/scan/status', (req, res) => {
   res.json({ ok: true, status, ...state });
 });
 
+// GET /api/sync-status — history sync progress (how many messages per group are in memory)
+app.get('/api/sync-status', (req, res) => {
+  const { getSyncStatus, isReady } = require('../bot');
+  res.json({ ok: true, connected: isReady(), ...getSyncStatus() });
+});
+
 // ── Start server ─────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`🌐 Website running at http://localhost:${PORT}`);

@@ -316,6 +316,16 @@ header .subtitle {
 .scan-status.done    { background: #e8f5e9; color: #2e7d32; }
 .scan-status.error   { background: #ffebee; color: #b71c1c; }
 
+.sync-status {
+  font-size: 0.85rem;
+  padding: 0.4rem 0.8rem;
+  border-radius: 6px;
+  margin-bottom: 0.5rem;
+}
+.sync-status.syncing { background: #fff8e1; color: #7a5800; }
+.sync-status.ready   { background: #e8f5e9; color: #2e7d32; }
+.sync-status.warning { background: #ffebee; color: #b71c1c; }
+
 /* ── Main content ─────────────────────────────────────────────── */
 main {
   max-width: 1200px;

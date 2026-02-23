@@ -455,6 +455,45 @@ function renderAvailableGroups(query) {
   }
 }
 
+// ── Sync status indicator ──────────────────────────────────────────────────────
+
+async function checkSyncStatus() {
+  const el = document.getElementById('sync-status');
+  if (!el) return;
+  try {
+    const res = await fetch('/api/sync-status');
+    const data = await res.json();
+    if (!data.connected) {
+      el.className = 'sync-status warning';
+      el.textContent = '⚠️ WhatsApp לא מחובר';
+      return;
+    }
+    if (!data.historySyncComplete) {
+      let total = 0;
+      for (const c of Object.values(data.groupCounts || {})) total += c;
+      el.className = 'sync-status syncing';
+      el.textContent = `⏳ סנכרון היסטוריה פעיל — ${total} הודעות מ-${data.totalGroups} קבוצות עד כה...`;
+      return;
+    }
+    let total = 0;
+    for (const c of Object.values(data.groupCounts || {})) total += c;
+    el.className = 'sync-status ready';
+    el.textContent = `✅ סנכרון הושלם — ${total} הודעות מ-${data.totalGroups} קבוצות בזיכרון`;
+  } catch (_) {
+    el.className = 'sync-status warning';
+    el.textContent = '⚠️ לא ניתן לבדוק סטטוס סנכרון';
+  }
+}
+
+// Poll sync status every 5 seconds until complete, then stop
+let syncPoller = setInterval(async () => {
+  await checkSyncStatus();
+  const el = document.getElementById('sync-status');
+  if (el && el.classList.contains('ready')) clearInterval(syncPoller);
+}, 5000);
+// Also check immediately
+checkSyncStatus();
+
 // ── Scan panel ────────────────────────────────────────────────────────────────
 
 let scanPoller = null;

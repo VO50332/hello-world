@@ -31,6 +31,11 @@ const logger = pino({ level: 'silent' });
 // Populated by messages.upsert and messaging-history.set events
 const messageStore = new Map();
 
+// History sync tracking
+let historySyncComplete = false;
+let historySyncBatches = 0;
+let lastHistorySyncAt = null;
+
 function storeMessages(messages) {
   for (const msg of messages) {
     const jid = msg.key?.remoteJid;
@@ -38,6 +43,20 @@ function storeMessages(messages) {
     if (!messageStore.has(jid)) messageStore.set(jid, []);
     messageStore.get(jid).push(msg);
   }
+}
+
+function getSyncStatus() {
+  const groupCounts = {};
+  for (const [jid, msgs] of messageStore) {
+    groupCounts[jid] = msgs.length;
+  }
+  return {
+    historySyncComplete,
+    historySyncBatches,
+    lastHistorySyncAt,
+    totalGroups: messageStore.size,
+    groupCounts,
+  };
 }
 
 let sock = null;
@@ -125,12 +144,32 @@ async function runScan(groupId, groupName, days, msgsPerDay = 100, keywords = []
   const keywordLabel = keywords.length ? ` | keywords (${keywordMode.toUpperCase()}): ${keywords.join(', ')}` : '';
   console.log(`\n🔍 [${groupName}] Scanning last ${days} day(s) — up to ${limit} messages${keywordLabel}...`);
 
-  // Read messages from the manual store (populated via history sync + live messages)
+  // Read messages from the manual store (populated via history sync + live messages).
+  // If history sync is still in progress, wait up to 60 seconds for messages to arrive.
   if (!messageStore.has(groupId)) {
-    throw new Error(
-      `No messages found in memory for "${groupName}". ` +
-      `WhatsApp history sync may still be in progress — wait 1-2 minutes after connecting and try again.`
-    );
+    if (historySyncComplete) {
+      throw new Error(
+        `No messages found for "${groupName}" — history sync finished but this group had no messages. ` +
+        `Verify the group is correct, or wait for new messages to arrive.`
+      );
+    }
+    console.log(`   ⏳ No messages yet for "${groupName}" — waiting for history sync...`);
+    const WAIT_TIMEOUT = 60_000; // 60 seconds
+    const POLL_INTERVAL = 3_000; // check every 3s
+    const waitStart = Date.now();
+    while (!messageStore.has(groupId) && Date.now() - waitStart < WAIT_TIMEOUT) {
+      if (historySyncComplete) break; // sync finished, no point waiting longer
+      await new Promise(r => setTimeout(r, POLL_INTERVAL));
+    }
+    if (!messageStore.has(groupId)) {
+      throw new Error(
+        `No messages found for "${groupName}" after waiting ${Math.round((Date.now() - waitStart) / 1000)}s. ` +
+        (historySyncComplete
+          ? 'History sync completed but this group had no messages. Verify the group is correct.'
+          : 'History sync is still in progress — try again in a minute.')
+      );
+    }
+    console.log(`   ✅ Messages arrived for "${groupName}" after ${Math.round((Date.now() - waitStart) / 1000)}s.`);
   }
 
   const allMessages = messageStore.get(groupId);
@@ -226,7 +265,18 @@ async function connectToWhatsApp() {
   sock.ev.on('messages.upsert', ({ messages }) => storeMessages(messages));
 
   // Accumulate history sync (fires after connect with syncFullHistory: true)
-  sock.ev.on('messaging-history.set', ({ messages }) => storeMessages(messages));
+  sock.ev.on('messaging-history.set', ({ messages, isLatest }) => {
+    storeMessages(messages);
+    historySyncBatches++;
+    lastHistorySyncAt = new Date().toISOString();
+    console.log(`   📥 History sync batch #${historySyncBatches}: ${messages.length} messages (store has ${messageStore.size} groups now)`);
+    if (isLatest) {
+      historySyncComplete = true;
+      let total = 0;
+      for (const msgs of messageStore.values()) total += msgs.length;
+      console.log(`   ✅ History sync complete — ${total} messages across ${messageStore.size} groups.`);
+    }
+  });
 
   sock.ev.on('connection.update', ({ connection, lastDisconnect, qr }) => {
     if (qr) {
@@ -253,6 +303,9 @@ async function connectToWhatsApp() {
 
     if (connection === 'close') {
       clientReady = false;
+      historySyncComplete = false;
+      historySyncBatches = 0;
+      lastHistorySyncAt = null;
       const shouldReconnect = (lastDisconnect?.error instanceof Boom)
         ? lastDisconnect.error.output?.statusCode !== DisconnectReason.loggedOut
         : true;
@@ -280,4 +333,4 @@ async function getChats() {
 
 connectToWhatsApp();
 
-module.exports = { isReady: () => clientReady, getQr: () => currentQr, getChats, startScan, getScanState };
+module.exports = { isReady: () => clientReady, getQr: () => currentQr, getChats, startScan, getScanState, getSyncStatus };

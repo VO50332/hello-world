@@ -41,6 +41,61 @@ try { db.exec(`ALTER TABLE items ADD COLUMN message_at TEXT`); } catch (_) {}
 // Migrate: add group_id for multi-group support
 try { db.exec(`ALTER TABLE items ADD COLUMN group_id TEXT DEFAULT ''`); } catch (_) {}
 
+// Raw messages table — persists WhatsApp messages so the store survives restarts.
+// We only keep the last MESSAGE_RETENTION_DAYS days to keep the DB small.
+const MESSAGE_RETENTION_DAYS = 180;
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS raw_messages (
+    jid    TEXT NOT NULL,      -- WhatsApp group JID
+    msg_id TEXT NOT NULL,      -- WhatsApp message ID
+    msg_ts INTEGER NOT NULL,   -- Unix timestamp (seconds) for pruning
+    msg_json TEXT NOT NULL,    -- Full WAMessage serialized as JSON
+    PRIMARY KEY (jid, msg_id)
+  )
+`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_raw_messages_ts ON raw_messages(msg_ts)`);
+
+// Prune messages older than MESSAGE_RETENTION_DAYS on startup
+{
+  const cutoff = Math.floor(Date.now() / 1000) - MESSAGE_RETENTION_DAYS * 86400;
+  const pruned = db.prepare('DELETE FROM raw_messages WHERE msg_ts < ?').run(cutoff);
+  if (pruned.changes > 0) console.log(`🧹 Pruned ${pruned.changes} old raw messages from DB.`);
+}
+
+const _upsertMsg = db.prepare(`
+  INSERT OR IGNORE INTO raw_messages (jid, msg_id, msg_ts, msg_json)
+  VALUES (@jid, @msgId, @msgTs, @msgJson)
+`);
+
+/** Persist an array of WAMessages to the DB (ignores duplicates). */
+function saveRawMessages(messages) {
+  const save = db.transaction((msgs) => {
+    for (const msg of msgs) {
+      const jid = msg.key?.remoteJid;
+      const msgId = msg.key?.id;
+      const msgTs = Number(msg.messageTimestamp) || 0;
+      if (!jid || !msgId || msgTs <= 0) continue;
+      _upsertMsg.run({ jid, msgId, msgTs, msgJson: JSON.stringify(msg) });
+    }
+  });
+  save(messages);
+}
+
+/** Load all persisted messages from the DB into a Map<jid, WAMessage[]>. */
+function loadRawMessages() {
+  const rows = db.prepare('SELECT jid, msg_json FROM raw_messages ORDER BY msg_ts ASC').all();
+  const store = new Map();
+  for (const { jid, msg_json } of rows) {
+    try {
+      const msg = JSON.parse(msg_json);
+      if (!store.has(jid)) store.set(jid, []);
+      store.get(jid).push(msg);
+    } catch (_) { /* skip corrupt rows */ }
+  }
+  return store;
+}
+
 // Groups configuration table — managed via the web UI.
 // Seeded from .env on the very first run so existing setups keep working.
 db.exec(`
@@ -223,4 +278,5 @@ module.exports = {
   markItemTaken, markItemAvailable, deleteItem, deleteAllItems,
   deleteItemByMessageId, deleteLatestItemByPhone,
   getConfiguredGroups, addConfiguredGroup, removeConfiguredGroup,
+  saveRawMessages, loadRawMessages,
 };

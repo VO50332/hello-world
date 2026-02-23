@@ -14,7 +14,7 @@ const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 const path = require('path');
 const pino = require('pino');
-const { saveItem, getConfiguredGroups } = require('../db');
+const { saveItem, getConfiguredGroups, saveRawMessages, loadRawMessages } = require('../db');
 
 // Where to save photos sent in the group
 // All persistent data lives under data/ so a single Railway Volume covers everything
@@ -28,13 +28,44 @@ if (!fs.existsSync(AUTH_DIR)) fs.mkdirSync(AUTH_DIR, { recursive: true });
 const logger = pino({ level: 'silent' });
 
 // Manual message store: jid -> WAMessage[]
-// Populated by messages.upsert and messaging-history.set events
+// Pre-loaded from SQLite on startup; live messages + history sync add to it.
 const messageStore = new Map();
+
+// Pre-load persisted messages so the store works immediately on restart
+let preloadedFromDB = false;
+{
+  const loaded = loadRawMessages();
+  let total = 0;
+  for (const [jid, msgs] of loaded) {
+    messageStore.set(jid, msgs);
+    total += msgs.length;
+  }
+  if (total > 0) {
+    preloadedFromDB = true;
+    console.log(`📦 Loaded ${total} persisted messages across ${messageStore.size} groups from DB.`);
+  }
+}
 
 // History sync tracking
 let historySyncComplete = false;
 let historySyncBatches = 0;
 let lastHistorySyncAt = null;
+let historySyncTimer = null; // debounce timer to detect "sync done" on reconnects
+
+function markHistorySyncComplete(reason) {
+  if (historySyncComplete) return;
+  historySyncComplete = true;
+  let total = 0;
+  for (const msgs of messageStore.values()) total += msgs.length;
+  console.log(`   ✅ History sync complete (${reason}) — ${total} messages across ${messageStore.size} groups.`);
+}
+
+// Called on connection open and after each sync batch.
+// If no new history events arrive within the delay, considers sync done.
+function scheduleHistorySyncComplete(delayMs) {
+  clearTimeout(historySyncTimer);
+  historySyncTimer = setTimeout(() => markHistorySyncComplete(`no activity for ${delayMs / 1000}s`), delayMs);
+}
 
 function storeMessages(messages) {
   for (const msg of messages) {
@@ -43,6 +74,8 @@ function storeMessages(messages) {
     if (!messageStore.has(jid)) messageStore.set(jid, []);
     messageStore.get(jid).push(msg);
   }
+  // Persist to DB so messages survive restarts
+  try { saveRawMessages(messages); } catch (_) { /* non-fatal */ }
 }
 
 function getSyncStatus() {
@@ -264,17 +297,20 @@ async function connectToWhatsApp() {
   // Accumulate live messages
   sock.ev.on('messages.upsert', ({ messages }) => storeMessages(messages));
 
-  // Accumulate history sync (fires after connect with syncFullHistory: true)
+  // Accumulate history sync (fires after connect with syncFullHistory: true).
+  // isLatest=true means this is the final batch.  On reconnects WhatsApp may
+  // skip isLatest entirely, so we also use an idle timer as a fallback.
   sock.ev.on('messaging-history.set', ({ messages, isLatest }) => {
     storeMessages(messages);
     historySyncBatches++;
     lastHistorySyncAt = new Date().toISOString();
     console.log(`   📥 History sync batch #${historySyncBatches}: ${messages.length} messages (store has ${messageStore.size} groups now)`);
     if (isLatest) {
-      historySyncComplete = true;
-      let total = 0;
-      for (const msgs of messageStore.values()) total += msgs.length;
-      console.log(`   ✅ History sync complete — ${total} messages across ${messageStore.size} groups.`);
+      clearTimeout(historySyncTimer);
+      markHistorySyncComplete('isLatest=true');
+    } else {
+      // Reset idle timer — consider done 15s after the last batch
+      scheduleHistorySyncComplete(15_000);
     }
   });
 
@@ -299,6 +335,10 @@ async function connectToWhatsApp() {
         console.log('   Open the website and use ⚙️ ניהול קבוצות to add groups.');
       }
       console.log('   ⏳ History sync is running in the background — wait ~1 min before scanning.');
+      // Fallback: if no history events arrive within 20s of connecting (e.g. on
+      // a reconnect), mark sync as complete so scans are not blocked.
+      // If the DB was preloaded, a shorter 5s grace period is enough.
+      scheduleHistorySyncComplete(preloadedFromDB ? 5_000 : 20_000);
     }
 
     if (connection === 'close') {
@@ -306,6 +346,7 @@ async function connectToWhatsApp() {
       historySyncComplete = false;
       historySyncBatches = 0;
       lastHistorySyncAt = null;
+      clearTimeout(historySyncTimer);
       const shouldReconnect = (lastDisconnect?.error instanceof Boom)
         ? lastDisconnect.error.output?.statusCode !== DisconnectReason.loggedOut
         : true;

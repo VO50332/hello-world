@@ -58,9 +58,11 @@ function markHistorySyncComplete(reason) {
   let total = 0;
   for (const msgs of messageStore.values()) total += msgs.length;
   console.log(`   ✅ History sync complete (${reason}) — ${total} messages across ${messageStore.size} groups.`);
-  // After sync completes, request on-demand history for any configured group
-  // whose messages are still missing from the store.
-  requestMissingGroupHistory();
+  // Request on-demand history for missing groups, then auto-scan after a short delay
+  // to allow on-demand responses to arrive before we scan.
+  requestMissingGroupHistory().then(() => {
+    setTimeout(autoScanOnStartup, 10_000);
+  });
 }
 
 // Called on connection open and after each sync batch.
@@ -93,6 +95,23 @@ async function requestMissingGroupHistory() {
       console.warn(`   ⚠️ Failed to request history for "${g.name}": ${err?.message || err}`);
     }
   }
+}
+
+// Automatically scan all configured groups on startup, after history sync is ready.
+// Reads parameters from env: AUTO_SCAN_DAYS (default 30), SCAN_KEYWORDS.
+function autoScanOnStartup() {
+  const configured = getConfiguredGroups();
+  if (configured.length === 0) return;
+  if (scanState.running) return; // already running (e.g. manual scan triggered)
+
+  const days     = Math.max(1, parseInt(process.env.AUTO_SCAN_DAYS) || 30);
+  const msgsPerDay = Math.max(1, parseInt(process.env.AUTO_SCAN_MSGS_PER_DAY) || 500);
+  const keywords = process.env.SCAN_KEYWORDS
+    ? process.env.SCAN_KEYWORDS.split(',').map(k => k.trim().toLowerCase()).filter(Boolean)
+    : [];
+
+  console.log(`\n🤖 Auto-scan: scanning last ${days} day(s) for all configured groups...`);
+  startScan(days, msgsPerDay, keywords, 'or', null);
 }
 
 function storeMessages(messages) {

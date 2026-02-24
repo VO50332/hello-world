@@ -58,6 +58,9 @@ function markHistorySyncComplete(reason) {
   let total = 0;
   for (const msgs of messageStore.values()) total += msgs.length;
   console.log(`   ✅ History sync complete (${reason}) — ${total} messages across ${messageStore.size} groups.`);
+  // After sync completes, request on-demand history for any configured group
+  // whose messages are still missing from the store.
+  requestMissingGroupHistory();
 }
 
 // Called on connection open and after each sync batch.
@@ -65,6 +68,31 @@ function markHistorySyncComplete(reason) {
 function scheduleHistorySyncComplete(delayMs) {
   clearTimeout(historySyncTimer);
   historySyncTimer = setTimeout(() => markHistorySyncComplete(`no activity for ${delayMs / 1000}s`), delayMs);
+}
+
+// After history sync finishes, request on-demand history for configured groups
+// that are missing from the message store (common on reconnects).
+async function requestMissingGroupHistory() {
+  if (!sock) return;
+  const configured = getConfiguredGroups();
+  for (const g of configured) {
+    if (messageStore.has(g.id) && messageStore.get(g.id).length > 0) continue;
+    console.log(`📡 Requesting on-demand history for "${g.name}" (${g.id})...`);
+    try {
+      // Use fetchMessageHistory with a synthetic key:
+      //   - chatJid = the group's JID
+      //   - fromMe/id/timestamp can be synthetic since we want the "latest" messages
+      // WhatsApp will respond via messaging-history.set with syncType ON_DEMAND
+      await sock.fetchMessageHistory(
+        50,  // request up to 50 messages
+        { remoteJid: g.id, fromMe: false, id: '3EB0' + Date.now().toString(16).toUpperCase() },
+        Date.now()
+      );
+      console.log(`   ✅ On-demand history request sent for "${g.name}".`);
+    } catch (err) {
+      console.warn(`   ⚠️ Failed to request history for "${g.name}": ${err?.message || err}`);
+    }
+  }
 }
 
 function storeMessages(messages) {
@@ -178,41 +206,47 @@ async function runScan(groupId, groupName, days, msgsPerDay = 100, keywords = []
   console.log(`\n🔍 [${groupName}] Scanning last ${days} day(s) — up to ${limit} messages${keywordLabel}...`);
 
   // Read messages from the manual store (populated via history sync + live messages).
-  // If history sync is still in progress, wait up to 60 seconds for messages to arrive.
+  // If messages are missing, either wait for sync or request on-demand history.
   if (!messageStore.has(groupId)) {
-    // Log what IS in the store to help diagnose JID mismatches
     const storeJids = [...messageStore.keys()];
     console.warn(`⚠️  [${groupName}] Group "${groupId}" not found in store.`);
     console.warn(`   Store contains ${storeJids.length} group(s): ${storeJids.join(', ') || '(empty)'}`);
 
-    if (historySyncComplete) {
-      const hint = storeJids.length > 0
-        ? ` Groups in store: ${storeJids.join(', ')}`
-        : ' The message store is empty — WhatsApp did not send any history for this session.';
-      throw new Error(
-        `No messages found for "${groupName}" (${groupId}).\n` +
-        `History sync is complete but this group has no messages.${hint}\n` +
-        `Tip: Check that the group ID is correct, or wait for new messages to arrive in the group.`
-      );
+    // If history sync already finished without this group, request on-demand history
+    if (historySyncComplete && sock) {
+      console.log(`   📡 Requesting on-demand history for "${groupName}"...`);
+      try {
+        await sock.fetchMessageHistory(
+          50,
+          { remoteJid: groupId, fromMe: false, id: '3EB0' + Date.now().toString(16).toUpperCase() },
+          Date.now()
+        );
+      } catch (err) {
+        console.warn(`   ⚠️ On-demand request failed: ${err?.message || err}`);
+      }
     }
-    console.log(`   ⏳ No messages yet for "${groupName}" — waiting for history sync...`);
-    const WAIT_TIMEOUT = 60_000; // 60 seconds
-    const POLL_INTERVAL = 3_000; // check every 3s
+
+    // Wait for messages to arrive (from either regular sync or on-demand request)
+    console.log(`   ⏳ Waiting for messages for "${groupName}"...`);
+    const WAIT_TIMEOUT = 30_000; // 30 seconds
+    const POLL_INTERVAL = 2_000; // check every 2s
     const waitStart = Date.now();
     while (!messageStore.has(groupId) && Date.now() - waitStart < WAIT_TIMEOUT) {
-      if (historySyncComplete) break; // sync finished, no point waiting longer
+      // If sync just finished AND we're not expecting an on-demand response, break
+      if (historySyncComplete && !sock) break;
       await new Promise(r => setTimeout(r, POLL_INTERVAL));
     }
     if (!messageStore.has(groupId)) {
       const storeJids2 = [...messageStore.keys()];
       const hint = storeJids2.length > 0
-        ? ` Groups in store: ${storeJids2.join(', ')}`
-        : ' The message store is empty.';
+        ? `\nGroups in store: ${storeJids2.join(', ')}`
+        : '\nThe message store is empty — WhatsApp did not send any history.';
       throw new Error(
-        `No messages found for "${groupName}" (${groupId}) after waiting ${Math.round((Date.now() - waitStart) / 1000)}s. ` +
-        (historySyncComplete
-          ? `History sync completed but this group had no messages.${hint}`
-          : 'History sync is still in progress — try again in a minute.')
+        `No messages found for "${groupName}" (${groupId}).${hint}\n` +
+        'Possible fixes:\n' +
+        '• Open "Vinted Haifa" on your phone and send/view a message, then retry\n' +
+        '• Delete the data/baileys_auth folder and restart to do a fresh QR scan\n' +
+        '• Wait for new messages to arrive in the group'
       );
     }
     console.log(`   ✅ Messages arrived for "${groupName}" after ${Math.round((Date.now() - waitStart) / 1000)}s.`);
@@ -313,11 +347,18 @@ async function connectToWhatsApp() {
   // Accumulate history sync (fires after connect with syncFullHistory: true).
   // isLatest=true means this is the final batch.  On reconnects WhatsApp may
   // skip isLatest entirely, so we also use an idle timer as a fallback.
-  sock.ev.on('messaging-history.set', ({ messages, isLatest }) => {
+  // syncType values: 0=INITIAL_BOOTSTRAP, 2=FULL, 3=RECENT, 6=ON_DEMAND
+  sock.ev.on('messaging-history.set', ({ messages, chats, isLatest, syncType, progress }) => {
     storeMessages(messages);
     historySyncBatches++;
     lastHistorySyncAt = new Date().toISOString();
-    console.log(`   📥 History sync batch #${historySyncBatches}: ${messages.length} messages (store has ${messageStore.size} groups now)`);
+
+    const chatJids = (chats || []).map(c => c.id).filter(Boolean);
+    console.log(`   📥 History batch #${historySyncBatches}: ${messages.length} msgs, ${chatJids.length} chats, syncType=${syncType ?? '?'}, progress=${progress ?? '?'}, isLatest=${isLatest}`);
+    if (chatJids.length > 0 && chatJids.length <= 20) {
+      console.log(`      Chats: ${chatJids.join(', ')}`);
+    }
+
     if (isLatest) {
       clearTimeout(historySyncTimer);
       markHistorySyncComplete('isLatest=true');

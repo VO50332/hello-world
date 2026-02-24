@@ -244,7 +244,7 @@ async function runScan(groupId, groupName, days, msgsPerDay = 100, keywords = []
       throw new Error(
         `No messages found for "${groupName}" (${groupId}).${hint}\n` +
         'Possible fixes:\n' +
-        '• Open "Vinted Haifa" on your phone and send/view a message, then retry\n' +
+        `• Open "${groupName}" on your phone and scroll through recent messages, then retry\n` +
         '• Delete the data/baileys_auth folder and restart to do a fresh QR scan\n' +
         '• Wait for new messages to arrive in the group'
       );

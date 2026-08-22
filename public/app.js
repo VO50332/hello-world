@@ -11,79 +11,15 @@ const searchInput = document.getElementById('searchInput');
 let allItems = [];
 let activeGroupId = null; // null = all groups
 
-// ── Admin auth ────────────────────────────────────────────────────────────────
-let adminToken = localStorage.getItem('adminToken') || '';
-
-function isAdminMode() { return adminToken.length > 0; }
-
-function authHeaders() {
-  return adminToken ? { 'Authorization': 'Bearer ' + adminToken } : {};
-}
-
-// Shows/hides admin-only UI elements based on current auth state.
-// Called on page load and after any login/logout.
-function applyAdminVisibility() {
-  const admin = isAdminMode();
-  const lockBtn = document.getElementById('lockBtn');
-  if (lockBtn) lockBtn.textContent = admin ? '🔓 נעל ממשק' : '🔒 כניסת מנהל';
-  const clearBtn = document.getElementById('clearAllBtn');
-  if (clearBtn) clearBtn.style.display = admin ? '' : 'none';
-  const groupsPanel = document.getElementById('groups-panel');
-  if (groupsPanel) groupsPanel.style.display = admin ? '' : 'none';
-  const scanPanel = document.getElementById('scan-panel');
-  if (scanPanel) scanPanel.style.display = admin ? '' : 'none';
-}
-
-// Called when a protected API returns 401 (e.g. after a server restart).
-function handleAuthError() {
-  adminToken = '';
-  localStorage.removeItem('adminToken');
-  applyAdminVisibility();
-  loadItems();
-  alert('הפגישה פגה. הזן PIN שוב.');
-}
-
-async function toggleAdminMode() {
-  if (isAdminMode()) {
-    // Already unlocked → lock
-    adminToken = '';
-    localStorage.removeItem('adminToken');
-    applyAdminVisibility();
-    loadItems();
-    return;
-  }
-  const pin = prompt('הזן PIN כדי לגשת לממשק הניהול:');
-  if (pin === null) return; // user cancelled
-  try {
-    const res = await fetch('/api/auth', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pin }),
-    });
-    const data = await res.json();
-    if (data.ok) {
-      adminToken = data.token;
-      localStorage.setItem('adminToken', adminToken);
-      applyAdminVisibility();
-      loadItems(); // re-render cards with delete buttons
-    } else {
-      alert('PIN שגוי. נסה שנית.');
-    }
-  } catch (err) {
-    alert('שגיאת רשת: ' + err.message);
-  }
-}
-
 // Load groups and items when the page opens
 document.addEventListener('DOMContentLoaded', () => {
-  applyAdminVisibility(); // hide/show admin panels before data loads
   loadGroups().then(loadItems);
   initGroupsPanel();
 });
 showTakenCheckbox.addEventListener('change', loadItems);
 
 // Filter locally as the user types — no extra network request.
-// Also listen to 'search' so the browser's × clear button works correctly.
+// Also listen to 'search' so the browser's x clear button works correctly.
 searchInput.addEventListener('input', renderItems);
 searchInput.addEventListener('search', renderItems);
 
@@ -250,45 +186,40 @@ function createCard(item) {
   body.appendChild(meta);
   card.appendChild(body);
 
-  // ── Action buttons (only for authenticated admin) ────────────
+  // ── Action buttons ──────────────────────────────────────────
   const actions = document.createElement('div');
   actions.className = 'item-actions';
 
-  if (isAdminMode() && !item.is_taken) {
+  if (!item.is_taken) {
     const takenBtn = document.createElement('button');
     takenBtn.className = 'btn btn-taken';
     takenBtn.textContent = 'סמן כנלקח';
     takenBtn.onclick = async () => {
-      const res = await fetch(`/api/items/${item.id}/taken`, { method: 'PATCH', headers: authHeaders() });
-      if (res.status === 401) { handleAuthError(); return; }
+      await fetch(`/api/items/${item.id}/taken`, { method: 'PATCH' });
       loadItems();
     };
     actions.appendChild(takenBtn);
-  } else if (isAdminMode() && item.is_taken) {
+  } else {
     const availBtn = document.createElement('button');
     availBtn.className = 'btn btn-avail';
     availBtn.textContent = 'סמן כזמין';
     availBtn.onclick = async () => {
-      const res = await fetch(`/api/items/${item.id}/available`, { method: 'PATCH', headers: authHeaders() });
-      if (res.status === 401) { handleAuthError(); return; }
+      await fetch(`/api/items/${item.id}/available`, { method: 'PATCH' });
       loadItems();
     };
     actions.appendChild(availBtn);
   }
 
-  if (isAdminMode()) {
-    const deleteBtn = document.createElement('button');
-    deleteBtn.className = 'btn btn-delete';
-    deleteBtn.textContent = 'מחק';
-    deleteBtn.onclick = async () => {
-      if (confirm('למחוק את הפריט?')) {
-        const res = await fetch(`/api/items/${item.id}`, { method: 'DELETE', headers: authHeaders() });
-        if (res.status === 401) { handleAuthError(); return; }
-        loadItems();
-      }
-    };
-    actions.appendChild(deleteBtn);
-  }
+  const deleteBtn = document.createElement('button');
+  deleteBtn.className = 'btn btn-delete';
+  deleteBtn.textContent = 'מחק';
+  deleteBtn.onclick = async () => {
+    if (confirm('למחוק את הפריט?')) {
+      await fetch(`/api/items/${item.id}`, { method: 'DELETE' });
+      loadItems();
+    }
+  };
+  actions.appendChild(deleteBtn);
 
   card.appendChild(actions);
   return card;
@@ -324,8 +255,7 @@ setInterval(loadItems, 30_000);
 
 async function clearAllItems() {
   if (!confirm('למחוק את כל הפריטים? פעולה זו אינה ניתנת לביטול.')) return;
-  const res = await fetch('/api/items', { method: 'DELETE', headers: authHeaders() });
-  if (res.status === 401) { handleAuthError(); return; }
+  await fetch('/api/items', { method: 'DELETE' });
   loadItems();
 }
 
@@ -350,8 +280,7 @@ async function fetchAvailableChats() {
   const statusEl = document.getElementById('chats-status');
   statusEl.textContent = '⏳ טוען רשימת קבוצות מ-WhatsApp...';
   try {
-    const res = await fetch('/api/chats', { headers: authHeaders() });
-    if (res.status === 401) { handleAuthError(); return; }
+    const res = await fetch('/api/chats');
     const data = await res.json();
     if (data.ok) {
       availableChats = data.groups || [];
@@ -390,8 +319,7 @@ function renderConfiguredGroups() {
     removeBtn.className = 'btn btn-delete btn-sm';
     removeBtn.textContent = 'הסר';
     removeBtn.onclick = async () => {
-      const res = await fetch('/api/groups/' + encodeURIComponent(g.id), { method: 'DELETE', headers: authHeaders() });
-      if (res.status === 401) { handleAuthError(); return; }
+      await fetch('/api/groups/' + encodeURIComponent(g.id), { method: 'DELETE' });
       await loadGroups();
       renderConfiguredGroups();
       renderAvailableGroups(document.getElementById('groupSearchInput').value);
@@ -437,12 +365,11 @@ function renderAvailableGroups(query) {
     addBtn.textContent = 'הוסף';
     addBtn.onclick = async () => {
       addBtn.disabled = true;
-      const res = await fetch('/api/groups', {
+      await fetch('/api/groups', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: chat.id, name: chat.name }),
       });
-      if (res.status === 401) { handleAuthError(); return; }
       await loadGroups();
       renderConfiguredGroups();
       renderAvailableGroups(document.getElementById('groupSearchInput').value);
@@ -516,8 +443,7 @@ async function triggerScan() {
   statusEl.textContent = '⏳ מתחיל סריקה...';
 
   try {
-    const res = await fetch(url, { headers: authHeaders() });
-    if (res.status === 401) { handleAuthError(); btn.disabled = false; return; }
+    const res = await fetch(url);
     const data = await res.json();
     if (!data.ok) {
       statusEl.className = 'scan-status error';

@@ -3,7 +3,6 @@
 
 const express = require('express');
 const path = require('path');
-const crypto = require('crypto');
 const {
   getAvailableItems, getAllItems, getGroupIds,
   markItemTaken, markItemAvailable, deleteItem, deleteAllItems,
@@ -13,30 +12,19 @@ const {
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ── Admin PIN auth ────────────────────────────────────────────────────────────
-const ADMIN_PIN = process.env.ADMIN_PIN || '';
-const validTokens = new Set(); // cleared on server restart — intentional
-
-function authEnabled() { return ADMIN_PIN.length > 0; }
-
-function isAuthenticated(req) {
-  if (!authEnabled()) return true;
-  const header = req.headers['authorization'] || '';
-  const token = header.startsWith('Bearer ') ? header.slice(7) : '';
-  return token && validTokens.has(token);
-}
-
-function requireAuth(req, res, next) {
-  if (isAuthenticated(req)) return next();
-  return res.status(401).json({ ok: false, error: 'נדרשת הזדהות עם PIN' });
-}
-
 // Parse JSON request bodies
 app.use(express.json());
 
-// Uploaded photos live in data/uploads/ (persisted via Railway Volume).
+// Uploaded photos live in data/uploads/.
 // Must be registered BEFORE the catch-all static middleware below.
 app.use('/uploads', express.static(path.join(__dirname, '../../data/uploads')));
+
+// Auto-redirect to /qr when WhatsApp is not connected yet (first-run experience)
+app.get('/', (req, res, next) => {
+  const { isReady } = require('../bot');
+  if (!isReady()) return res.redirect('/qr.html');
+  next();
+});
 
 // Serve static files (website)
 app.use(express.static(path.join(__dirname, '../../public')));
@@ -44,34 +32,9 @@ app.use(express.static(path.join(__dirname, '../../public')));
 // ── API Routes ───────────────────────────────────────────────────────────────
 
 // GET /api/qr — returns the current QR string so the /qr browser page can render it.
-// Protected: exposing the QR publicly would let anyone hijack the WhatsApp session.
-app.get('/api/qr', requireAuth, (req, res) => {
+app.get('/api/qr', (req, res) => {
   const { getQr, isReady } = require('../bot');
   res.json({ qr: getQr(), connected: isReady() });
-});
-
-// GET /api/auth-required — lets the frontend know whether a PIN is needed
-app.get('/api/auth-required', (req, res) => {
-  res.json({ required: authEnabled() });
-});
-
-// POST /api/auth — verify PIN and return a session token
-app.post('/api/auth', (req, res) => {
-  if (!authEnabled()) return res.json({ ok: true, token: 'no-auth' });
-  const { pin } = req.body || {};
-  if (!pin || pin !== ADMIN_PIN)
-    return res.status(401).json({ ok: false, error: 'PIN שגוי' });
-  const token = crypto.randomBytes(24).toString('hex');
-  validTokens.add(token);
-  res.json({ ok: true, token });
-});
-
-// DELETE /api/auth — logout (invalidate token)
-app.delete('/api/auth', (req, res) => {
-  const header = req.headers['authorization'] || '';
-  const token = header.startsWith('Bearer ') ? header.slice(7) : '';
-  validTokens.delete(token);
-  res.json({ ok: true });
 });
 
 // GET /api/groups — return configured groups (id + name) + any legacy DB-only groups
@@ -88,7 +51,7 @@ app.get('/api/groups', (req, res) => {
 
 // POST /api/groups — add (or rename) a configured group
 // Body: { id: "120363XXX@g.us", name: "קח תן רוממה" }
-app.post('/api/groups', requireAuth, (req, res) => {
+app.post('/api/groups', (req, res) => {
   const { id, name } = req.body || {};
   if (!id || !id.endsWith('@g.us')) {
     return res.status(400).json({ ok: false, error: 'מזהה קבוצה לא תקין — חייב להסתיים ב-@g.us' });
@@ -98,7 +61,7 @@ app.post('/api/groups', requireAuth, (req, res) => {
 });
 
 // DELETE /api/groups/:id — remove a configured group (does NOT delete its items)
-app.delete('/api/groups/:id', requireAuth, (req, res) => {
+app.delete('/api/groups/:id', (req, res) => {
   removeConfiguredGroup(req.params.id);
   res.json({ ok: true });
 });
@@ -113,25 +76,25 @@ app.get('/api/items', (req, res) => {
 });
 
 // PATCH /api/items/:id/taken — mark an item as taken
-app.patch('/api/items/:id/taken', requireAuth, (req, res) => {
+app.patch('/api/items/:id/taken', (req, res) => {
   markItemTaken(Number(req.params.id));
   res.json({ ok: true });
 });
 
 // PATCH /api/items/:id/available — mark an item as available again
-app.patch('/api/items/:id/available', requireAuth, (req, res) => {
+app.patch('/api/items/:id/available', (req, res) => {
   markItemAvailable(Number(req.params.id));
   res.json({ ok: true });
 });
 
 // DELETE /api/items/:id — remove an item
-app.delete('/api/items/:id', requireAuth, (req, res) => {
+app.delete('/api/items/:id', (req, res) => {
   deleteItem(Number(req.params.id));
   res.json({ ok: true });
 });
 
 // DELETE /api/items — remove ALL items
-app.delete('/api/items', requireAuth, (req, res) => {
+app.delete('/api/items', (req, res) => {
   deleteAllItems();
   res.json({ ok: true });
 });
@@ -140,7 +103,7 @@ app.delete('/api/items', requireAuth, (req, res) => {
 // GET /api/chats         — list all WhatsApp groups the bot is a member of.
 // GET /api/scan?days=7   — starts a background scan and returns immediately.
 // GET /api/scan/status   — check whether the scan is still running and see results.
-app.get('/api/chats', requireAuth, async (req, res) => {
+app.get('/api/chats', async (req, res) => {
   try {
     const { getChats, isReady } = require('../bot');
     if (!isReady()) {
@@ -153,7 +116,7 @@ app.get('/api/chats', requireAuth, async (req, res) => {
   }
 });
 
-app.get('/api/scan', requireAuth, (req, res) => {
+app.get('/api/scan', (req, res) => {
   const days = Math.max(1, Math.min(Number(req.query.days) || 7, 180));
   const msgsPerDay = Math.max(1, Number(req.query.msgsPerDay) || 500);
   const keywords = req.query.keywords
@@ -187,8 +150,8 @@ app.get('/api/sync-status', (req, res) => {
   res.json({ ok: true, connected: isReady(), ...getSyncStatus() });
 });
 
-// GET /api/store-debug — compare message store JIDs vs configured groups (admin only)
-app.get('/api/store-debug', requireAuth, (req, res) => {
+// GET /api/store-debug — compare message store JIDs vs configured groups
+app.get('/api/store-debug', (req, res) => {
   const { getSyncStatus, isReady } = require('../bot');
   const sync = getSyncStatus();
   const configured = getConfiguredGroups();
@@ -211,13 +174,6 @@ app.get('/api/store-debug', requireAuth, (req, res) => {
 // ── Start server ─────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`🌐 Website running at http://localhost:${PORT}`);
-  if (!authEnabled()) {
-    console.warn('');
-    console.warn('⚠️  WARNING: ADMIN_PIN is not set!');
-    console.warn('   Anyone with your URL can delete items, manage groups, and access the QR code.');
-    console.warn('   Set ADMIN_PIN in your .env file to secure the admin interface.');
-    console.warn('');
-  }
 });
 
 module.exports = app;

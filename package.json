@@ -1,7 +1,7 @@
 {
   "name": "whatsapp-marketplace-bot",
   "version": "1.0.0",
-  "description": "WhatsApp bot that monitors a Hebrew free-stuff group and publishes listings to a website",
+  "description": "Search your WhatsApp groups for free stuff — run locally, scan your QR, browse items on a website",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
